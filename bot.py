@@ -8,13 +8,25 @@ from aiogram.client.default import DefaultBotProperties
 
 from config import BOT_TOKEN
 from database import init_db
-from handlers import start, keys, admin, commands
+from handlers import start, keys, admin, commands, business
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# All update types needed, including Business Mode
+ALLOWED_UPDATES = [
+    "message",
+    "edited_message",
+    "callback_query",
+    "inline_query",
+    "business_connection",
+    "business_message",
+    "edited_business_message",
+    "deleted_business_messages",
+]
 
 
 async def main():
@@ -32,9 +44,10 @@ async def main():
     dp.include_router(keys.router)
     dp.include_router(admin.router)
     dp.include_router(commands.router)
+    dp.include_router(business.router)
 
     logger.info("Bot starting...")
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    await dp.start_polling(bot, allowed_updates=ALLOWED_UPDATES)
 
 
 if __name__ == "__main__":
