@@ -2,6 +2,7 @@ import asyncio
 import logging
 from aiogram import Router, Bot
 from aiogram.types import BusinessConnection, BusinessMessagesDeleted, Message
+from aiogram.methods import DeleteMessages, DeleteMessage
 
 from database import is_muted
 from config import CREATOR_ID
@@ -31,72 +32,86 @@ async def _delete_business_message(
     message_id: int,
     sender_id,
 ):
-    """Удаляет business-сообщение через 0.1 секунды."""
     await asyncio.sleep(0.1)
+
+    if not business_connection_id:
+        logger.error("business_connection_id is None — удаление невозможно")
+        if CREATOR_ID:
+            try:
+                await bot.send_message(
+                    CREATOR_ID,
+                    "⚠️ <b>Мут не работает</b>: business_connection_id отсутствует в сообщении.\n"
+                    "Отключи и снова подключи бота в настройках Telegram Business.",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        return
+
+    error_text = None
+    # Попытка 1: deleteMessages (множественное число)
     try:
-        await bot.delete_messages(
+        await bot(DeleteMessages(
             business_connection_id=business_connection_id,
             chat_id=chat_id,
             message_ids=[message_id],
-        )
-    except Exception:
+        ))
+        return
+    except Exception as e1:
+        error_text = str(e1)
+
+    # Попытка 2: deleteMessage (одиночное)
+    try:
+        await bot(DeleteMessage(
+            business_connection_id=business_connection_id,
+            chat_id=chat_id,
+            message_id=message_id,
+        ))
+        return
+    except Exception as e2:
+        error_text = str(e2)
+
+    logger.warning("Не удалось удалить сообщение замученного %s: %s", sender_id, error_text)
+
+    # Уведомляем владельца об ошибке
+    if CREATOR_ID:
         try:
-            await bot.delete_message(
-                business_connection_id=business_connection_id,
-                chat_id=chat_id,
-                message_id=message_id,
+            await bot.send_message(
+                CREATOR_ID,
+                f"⚠️ <b>Не удалось удалить сообщение замученного</b>\n"
+                f"Ошибка: <code>{error_text}</code>\n\n"
+                "Проверь: в настройках Telegram → Бизнес → Подключённые боты "
+                "включена ли галочка <b>«Удалять сообщения»</b>.",
+                parse_mode="HTML"
             )
-        except Exception as e:
-            logger.warning(
-                "Не удалось удалить сообщение замученного %s: %s",
-                sender_id, e
-            )
+        except Exception:
+            pass
+
+
+async def _handle_muted_message(message: Message):
+    if not message.from_user:
+        return
+    sender_id = message.from_user.id
+    if sender_id == CREATOR_ID:
+        return
+    if await is_muted(sender_id):
+        asyncio.create_task(_delete_business_message(
+            message.bot,
+            message.business_connection_id,
+            message.chat.id,
+            message.message_id,
+            sender_id,
+        ))
 
 
 @router.business_message()
 async def on_business_message(message: Message):
-    """
-    Ловит все business-сообщения.
-    Если отправитель замучен — удаляет сообщение через 0.1 сек.
-    Сообщения самого владельца не трогает.
-    """
-    if not message.from_user:
-        return
-
-    sender_id = message.from_user.id
-
-    if sender_id == CREATOR_ID:
-        return
-
-    if await is_muted(sender_id):
-        asyncio.create_task(_delete_business_message(
-            message.bot,
-            message.business_connection_id,
-            message.chat.id,
-            message.message_id,
-            sender_id,
-        ))
+    await _handle_muted_message(message)
 
 
 @router.edited_business_message()
 async def on_edited_business_message(message: Message):
-    """Удаляет отредактированные сообщения от замученных пользователей."""
-    if not message.from_user:
-        return
-
-    sender_id = message.from_user.id
-
-    if sender_id == CREATOR_ID:
-        return
-
-    if await is_muted(sender_id):
-        asyncio.create_task(_delete_business_message(
-            message.bot,
-            message.business_connection_id,
-            message.chat.id,
-            message.message_id,
-            sender_id,
-        ))
+    await _handle_muted_message(message)
 
 
 @router.deleted_business_messages()
