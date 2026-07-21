@@ -3,7 +3,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 
 from database import is_admin, is_user_activated, get_activation
-from keyboards import main_menu, back_button, chat_settings_menu
+from keyboards import main_menu, main_reply_keyboard, back_button, chat_settings_menu
 from config import CREATOR_ID
 
 router = Router()
@@ -32,7 +32,9 @@ COMMANDS_TEXT = """
 <i>Пример:</i> <code>.spam Привет! 5</code>
 
 <b>.mute [время]</b>
-Мутит пользователя (нужно ответить на его сообщение).
+Мутит пользователя.
+— В группе: ответь на сообщение пользователя.
+— В ЛС (business): мутит собеседника, удаляет его сообщения.
 Время: <code>5m</code> (минуты), <code>1h</code> (часы), <code>1d</code> (дни)
 <i>Пример:</i> <code>.mute 10m</code>
 
@@ -43,10 +45,17 @@ COMMANDS_TEXT = """
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     admin = await is_admin(message.from_user.id)
+    # Отправляем reply-клавиатуру (внизу чата)
     await message.answer(
         f"👋 Привет, <b>{message.from_user.first_name}</b>!\n\n"
         "🤖 Я бот для управления чатами.\n"
         "Используй кнопки ниже для навигации.",
+        reply_markup=main_reply_keyboard(is_admin=admin),
+        parse_mode="HTML"
+    )
+    # Дополнительно отправляем inline-меню
+    await message.answer(
+        "👇 Выбери раздел:",
         reply_markup=main_menu(is_admin=admin),
         parse_mode="HTML"
     )
@@ -124,5 +133,76 @@ async def cb_chat_settings(callback: CallbackQuery):
     await callback.message.edit_text(
         intro,
         reply_markup=chat_settings_menu(activated or is_creator),
+        parse_mode="HTML"
+    )
+
+
+# ─── Обработка кнопок reply-клавиатуры ───────────────────────────────────────
+
+@router.message(F.text == "⚙️ Настройка чатов")
+async def reply_chat_settings(message: Message):
+    activated = await is_user_activated(message.from_user.id)
+    activation = await get_activation(message.from_user.id)
+    is_creator = message.from_user.id == CREATOR_ID
+
+    if is_creator:
+        status_line = "✅ Создатель — бот всегда активен"
+    elif activated and activation:
+        expires = activation.get("expires_at")
+        if expires:
+            status_line = f"✅ Бот активен до: <code>{expires}</code>"
+        else:
+            status_line = "✅ Бот активирован навсегда"
+    else:
+        status_line = "❌ Бот не активирован"
+
+    if activated or is_creator:
+        text = (
+            "⚙️ <b>Настройка чатов</b>\n\n"
+            f"{status_line}\n\n"
+            "Бот подключён и готов к работе в твоих чатах."
+        )
+    else:
+        text = (
+            "⚙️ <b>Настройка чатов</b>\n\n"
+            f"{status_line}\n\n"
+            "Для работы бота необходим ключ активации.\n"
+            "👇 <b>Введите ключ ниже</b> — нажмите кнопку и отправьте ключ."
+        )
+
+    await message.answer(
+        text,
+        reply_markup=chat_settings_menu(activated or is_creator),
+        parse_mode="HTML"
+    )
+
+
+@router.message(F.text == "📖 Как подключить")
+async def reply_tutorial(message: Message):
+    await message.answer(
+        TUTORIAL_TEXT,
+        reply_markup=back_button("start"),
+        parse_mode="HTML"
+    )
+
+
+@router.message(F.text == "📋 Мои команды")
+async def reply_commands(message: Message):
+    await message.answer(
+        COMMANDS_TEXT,
+        reply_markup=back_button("start"),
+        parse_mode="HTML"
+    )
+
+
+@router.message(F.text == "🔑 Панель администратора")
+async def reply_admin_panel(message: Message):
+    from keyboards import admin_panel_menu
+    if not await is_admin(message.from_user.id):
+        await message.answer("⛔ У тебя нет доступа к панели администратора.")
+        return
+    await message.answer(
+        "🔑 <b>Панель администратора</b>\n\nВыбери действие:",
+        reply_markup=admin_panel_menu(),
         parse_mode="HTML"
     )

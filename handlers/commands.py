@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from aiogram import Router, F
 from aiogram.types import Message, ChatPermissions
 
-from database import is_user_activated
+from database import is_user_activated, mute_user, is_muted
 
 router = Router()
 
@@ -19,7 +19,19 @@ def parse_duration(duration_str: str) -> int | None:
     return value * multipliers[unit]
 
 
-# ─── Общая логика ─────────────────────────────────────────────────────────────
+def format_time(seconds: int) -> str:
+    if seconds < 3600:
+        mins = seconds // 60
+        return f"{mins} мин."
+    elif seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours} ч."
+    else:
+        days = seconds // 86400
+        return f"{days} д."
+
+
+# ─── .spam ────────────────────────────────────────────────────────────────────
 
 async def _do_spam(message: Message):
     if not await is_user_activated(message.from_user.id):
@@ -57,35 +69,42 @@ async def _do_spam(message: Message):
         return
 
     if count > 30:
-        await message.reply("⚠️ <b>Максимум 30 сообщений.</b> Ограничиваю до 30.")
         count = 30
 
+    # Удаляем команду и пишем уведомление
     try:
         await message.delete()
     except Exception:
         pass
 
+    try:
+        notify = await message.answer("📨 <b>Начинаю спам...</b>")
+    except Exception:
+        notify = None
+
+    # Небольшая пауза чтобы уведомление успело отправиться
+    await asyncio.sleep(0.3)
+
+    # Удаляем уведомление и спамим
+    if notify:
+        try:
+            await notify.delete()
+        except Exception:
+            pass
+
     for i in range(count):
         try:
             await message.answer(spam_text)
             if i < count - 1:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)  # быстрый спам
         except Exception:
             break
 
 
-async def _do_mute(message: Message):
-    if not await is_user_activated(message.from_user.id):
-        await message.answer(
-            "❌ <b>Бот не активирован!</b>\n\n"
-            "Введи ключ активации в разделе <b>⚙️ Настройка чатов</b>."
-        )
-        return
+# ─── .mute в группах ──────────────────────────────────────────────────────────
 
-    if message.chat.type not in ("group", "supergroup"):
-        await message.reply("❌ <b>Команда .mute работает только в группах!</b>")
-        return
-
+async def _do_mute_group(message: Message):
+    """Мут в обычной группе через ограничение прав."""
     if not message.reply_to_message:
         await message.reply(
             "❌ <b>Ответь на сообщение пользователя, которого хочешь замутить!</b>\n"
@@ -112,6 +131,7 @@ async def _do_mute(message: Message):
 
     target_user = message.reply_to_message.from_user
     until_date = datetime.now() + timedelta(seconds=seconds)
+    time_text = format_time(seconds)
 
     try:
         await message.chat.restrict(
@@ -120,22 +140,17 @@ async def _do_mute(message: Message):
             until_date=until_date
         )
 
-        if seconds < 3600:
-            time_text = f"{seconds // 60} мин."
-        elif seconds < 86400:
-            time_text = f"{seconds // 3600} ч."
-        else:
-            time_text = f"{seconds // 86400} д."
-
-        await message.reply(
-            f"🔇 <b>{target_user.mention_html()} замучен</b>\n"
-            f"⏳ Срок: {time_text}\n"
-            f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}"
-        )
+        # Удаляем команду
         try:
             await message.delete()
         except Exception:
             pass
+
+        await message.answer(
+            f"🔇 <b>{target_user.mention_html()} замучен</b>\n"
+            f"⏳ Срок: {time_text}\n"
+            f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}"
+        )
     except Exception as e:
         err = str(e)
         if "not enough rights" in err or "CHAT_ADMIN_REQUIRED" in err:
@@ -145,6 +160,71 @@ async def _do_mute(message: Message):
             )
         else:
             await message.reply(f"❌ Не удалось замутить пользователя.\n<code>{err}</code>")
+
+
+# ─── .mute в ЛС (business mode) ──────────────────────────────────────────────
+
+async def _do_mute_dm(message: Message):
+    """
+    Мут в личных сообщениях через business mode.
+    Замучивает собеседника: его следующие сообщения будут автоматически удаляться.
+    Использование: .mute 10m (в диалоге с нужным человеком)
+    """
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.reply(
+            "❌ <b>Укажи время мута!</b>\n"
+            "Форматы: <code>5m</code> (мин), <code>1h</code> (час), <code>2d</code> (дни)\n"
+            "Пример: <code>.mute 10m</code>"
+        )
+        return
+
+    seconds = parse_duration(parts[1])
+    if seconds is None:
+        await message.reply(
+            "❌ <b>Неверный формат времени!</b>\n"
+            "Форматы: <code>5m</code> (мин), <code>1h</code> (час), <code>2d</code> (дни)"
+        )
+        return
+
+    # В business DM: chat.id — это ID собеседника
+    target_id = message.chat.id
+    until_date = datetime.now() + timedelta(seconds=seconds)
+    time_text = format_time(seconds)
+
+    success = await mute_user(target_id, until_date)
+
+    # Удаляем команду
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    if success:
+        await message.answer(
+            f"🔇 <b>Пользователь замучен на {time_text}</b>\n"
+            f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}\n"
+            "Его сообщения будут автоматически удаляться."
+        )
+    else:
+        await message.answer("❌ Не удалось замутить пользователя.")
+
+
+# ─── Общая точка входа для .mute ─────────────────────────────────────────────
+
+async def _do_mute(message: Message):
+    if not await is_user_activated(message.from_user.id):
+        await message.answer(
+            "❌ <b>Бот не активирован!</b>\n\n"
+            "Введи ключ активации в разделе <b>⚙️ Настройка чатов</b>."
+        )
+        return
+
+    if message.chat.type in ("group", "supergroup"):
+        await _do_mute_group(message)
+    else:
+        # ЛС или business DM
+        await _do_mute_dm(message)
 
 
 # ─── Обычные сообщения ────────────────────────────────────────────────────────

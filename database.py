@@ -1,6 +1,7 @@
 """
 Database layer — поддерживает PostgreSQL (Railway, DATABASE_URL) и SQLite (локально).
 1 ключ = 1 пользователь: после активации ключ привязывается к user_id.
+Данные (ключи, админы, пользователи) НЕ сбрасываются при перезапуске бота.
 """
 import os
 import asyncpg
@@ -57,6 +58,12 @@ async def init_db():
                     expires_at TIMESTAMP
                 )
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS muted_users (
+                    user_id BIGINT PRIMARY KEY,
+                    muted_until TIMESTAMP NOT NULL
+                )
+            """)
             if CREATOR_ID:
                 await conn.execute("""
                     INSERT INTO admins (user_id, username)
@@ -65,6 +72,8 @@ async def init_db():
                 """, CREATOR_ID, "Creator")
     else:
         async with aiosqlite.connect(DB_PATH) as db:
+            # WAL-режим: данные не теряются при перезапуске
+            await db.execute("PRAGMA journal_mode=WAL")
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS admins (
                     user_id INTEGER PRIMARY KEY,
@@ -94,6 +103,12 @@ async def init_db():
                     key_used TEXT,
                     activated_at TEXT DEFAULT (datetime('now')),
                     expires_at TEXT
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS muted_users (
+                    user_id INTEGER PRIMARY KEY,
+                    muted_until TEXT NOT NULL
                 )
             """)
             if CREATOR_ID:
@@ -367,3 +382,81 @@ async def get_activation(user_id: int) -> dict | None:
             ) as cur:
                 row = await cur.fetchone()
                 return dict(row) if row else None
+
+
+# ─── Mute (для ЛС через business mode) ───────────────────────────────────────
+
+async def mute_user(user_id: int, muted_until: datetime) -> bool:
+    """Мутит пользователя в ЛС (business mode). Сохраняет время окончания мута."""
+    try:
+        until_str = muted_until.strftime("%Y-%m-%d %H:%M:%S")
+        if USE_POSTGRES:
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO muted_users (user_id, muted_until)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO UPDATE SET muted_until = $2
+                """, user_id, muted_until)
+        else:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                    INSERT OR REPLACE INTO muted_users (user_id, muted_until)
+                    VALUES (?, ?)
+                """, (user_id, until_str))
+                await db.commit()
+        return True
+    except Exception:
+        return False
+
+
+async def is_muted(user_id: int) -> bool:
+    """Проверяет, замучен ли пользователь прямо сейчас."""
+    if USE_POSTGRES:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT muted_until FROM muted_users WHERE user_id = $1", user_id
+            )
+            if not row:
+                return False
+            muted_until = row["muted_until"]
+            if datetime.now() < muted_until.replace(tzinfo=None):
+                return True
+            # Мут истёк — удаляем запись
+            await conn.execute("DELETE FROM muted_users WHERE user_id = $1", user_id)
+            return False
+    else:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT muted_until FROM muted_users WHERE user_id = ?", (user_id,)
+            ) as cur:
+                row = await cur.fetchone()
+                if not row:
+                    return False
+                try:
+                    muted_until = datetime.fromisoformat(row[0])
+                    if datetime.now() < muted_until:
+                        return True
+                    # Мут истёк — удаляем
+                    await db.execute("DELETE FROM muted_users WHERE user_id = ?", (user_id,))
+                    await db.commit()
+                    return False
+                except Exception:
+                    return False
+
+
+async def unmute_user(user_id: int) -> bool:
+    """Снимает мут с пользователя."""
+    try:
+        if USE_POSTGRES:
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM muted_users WHERE user_id = $1", user_id)
+        else:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("DELETE FROM muted_users WHERE user_id = ?", (user_id,))
+                await db.commit()
+        return True
+    except Exception:
+        return False

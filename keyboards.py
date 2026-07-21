@@ -1,5 +1,27 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+)
 
+
+# ─── Reply-клавиатура (внизу чата, где пишешь) ───────────────────────────────
+
+def main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура внизу чата."""
+    buttons = [
+        [KeyboardButton(text="⚙️ Настройка чатов"), KeyboardButton(text="📖 Как подключить")],
+        [KeyboardButton(text="📋 Мои команды")],
+    ]
+    if is_admin:
+        buttons.append([KeyboardButton(text="🔑 Панель администратора")])
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        persistent=True
+    )
+
+
+# ─── Inline-клавиатуры ────────────────────────────────────────────────────────
 
 def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = [
