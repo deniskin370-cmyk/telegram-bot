@@ -24,26 +24,32 @@ async def on_business_connection(event: BusinessConnection):
         )
 
 
-async def _delete_business_message(bot: Bot, message: Message):
+async def _delete_business_message(
+    bot: Bot,
+    business_connection_id: str,
+    chat_id: int,
+    message_id: int,
+    sender_id,
+):
     """Удаляет business-сообщение через 0.1 секунды."""
     await asyncio.sleep(0.1)
     try:
-        # Пробуем удалить через delete_messages (поддерживает business_connection_id в новых версиях API)
         await bot.delete_messages(
-            chat_id=message.chat.id,
-            message_ids=[message.message_id]
+            business_connection_id=business_connection_id,
+            chat_id=chat_id,
+            message_ids=[message_id],
         )
     except Exception:
         try:
-            # Резервный метод
             await bot.delete_message(
-                chat_id=message.chat.id,
-                message_id=message.message_id
+                business_connection_id=business_connection_id,
+                chat_id=chat_id,
+                message_id=message_id,
             )
         except Exception as e:
             logger.warning(
                 "Не удалось удалить сообщение замученного %s: %s",
-                message.from_user.id if message.from_user else "?", e
+                sender_id, e
             )
 
 
@@ -59,13 +65,17 @@ async def on_business_message(message: Message):
 
     sender_id = message.from_user.id
 
-    # Не удаляем сообщения самого владельца
     if sender_id == CREATOR_ID:
         return
 
     if await is_muted(sender_id):
-        bot: Bot = message.bot
-        asyncio.create_task(_delete_business_message(bot, message))
+        asyncio.create_task(_delete_business_message(
+            message.bot,
+            message.business_connection_id,
+            message.chat.id,
+            message.message_id,
+            sender_id,
+        ))
 
 
 @router.edited_business_message()
@@ -80,8 +90,13 @@ async def on_edited_business_message(message: Message):
         return
 
     if await is_muted(sender_id):
-        bot: Bot = message.bot
-        asyncio.create_task(_delete_business_message(bot, message))
+        asyncio.create_task(_delete_business_message(
+            message.bot,
+            message.business_connection_id,
+            message.chat.id,
+            message.message_id,
+            sender_id,
+        ))
 
 
 @router.deleted_business_messages()
