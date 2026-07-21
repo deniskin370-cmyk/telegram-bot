@@ -20,7 +20,6 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 PLANS = {
-    "buy_day":     {"label": "1 день",   "stars": 1,  "days": 1,  "gift_emoji": None},
     "buy_week":    {"label": "1 неделя", "stars": 15, "days": 7,  "gift_emoji": "❤"},
     "buy_month":   {"label": "1 месяц",  "stars": 25, "days": 30, "gift_emoji": "🎁"},
     "buy_forever": {"label": "Навсегда", "stars": 50, "days": None, "gift_emoji": "🎂"},
@@ -94,7 +93,7 @@ async def send_gift_to_neworsi(bot: Bot, plan_id: str) -> bool:
 
 # ─── Выбор плана ──────────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.in_({"buy_day", "buy_week", "buy_month", "buy_forever"}))
+@router.callback_query(F.data.in_({"buy_week", "buy_month", "buy_forever"}))
 async def cb_buy_plan(callback: CallbackQuery):
     plan_id = callback.data
     plan = PLANS[plan_id]
