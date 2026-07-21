@@ -23,6 +23,25 @@ PLANS = {
     "buy_forever": {"label": "Навсегда", "stars": 50, "days": None},
 }
 
+# Подарки, которые нужно отправить @Neworsi после оплаты
+GIFT_MESSAGES = {
+    "buy_week": (
+        "🎁 <b>Дополнительно:</b>\n\n"
+        "Пожалуйста, отправь подарок ❤️ (Сердечко) пользователю @Neworsi.\n"
+        "Это поможет поддержать развитие бота!"
+    ),
+    "buy_month": (
+        "🎁 <b>Дополнительно:</b>\n\n"
+        "Пожалуйста, отправь подарок 🎁 пользователю @Neworsi.\n"
+        "Это поможет поддержать развитие бота!"
+    ),
+    "buy_forever": (
+        "🎁 <b>Дополнительно:</b>\n\n"
+        "Пожалуйста, отправь подарок 🎂 (Торт) пользователю @Neworsi.\n"
+        "Это поможет поддержать развитие бота!"
+    ),
+}
+
 
 def generate_key(length: int = 16) -> str:
     chars = string.ascii_letters + string.digits
@@ -91,5 +110,11 @@ async def payment_done(message: Message):
         f"🔑 Ключ: <code>{key}</code>\n"
         f"⏳ Срок: <b>{plan['label']}</b> ({exp_text})\n\n"
         "Бот активирован. Команды уже работают в твоих чатах!\n"
-        "Не забудь подключить бота через <b>Автоматизацию чатов</b>."
+        "Не забудь подключить бота через <b>Автоматизацию чатов</b>.",
+        parse_mode="HTML"
     )
+
+    # Просим отправить подарок @Neworsi (для тарифов неделя/месяц/навсегда)
+    gift_text = GIFT_MESSAGES.get(payload)
+    if gift_text:
+        await message.answer(gift_text, parse_mode="HTML")

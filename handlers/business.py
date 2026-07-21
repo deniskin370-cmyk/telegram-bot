@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from aiogram import Router, Bot
 from aiogram.types import BusinessConnection, BusinessMessagesDeleted, Message
@@ -23,11 +24,34 @@ async def on_business_connection(event: BusinessConnection):
         )
 
 
+async def _delete_business_message(bot: Bot, message: Message):
+    """Удаляет business-сообщение через 0.1 секунды."""
+    await asyncio.sleep(0.1)
+    try:
+        # Пробуем удалить через delete_messages (поддерживает business_connection_id в новых версиях API)
+        await bot.delete_messages(
+            chat_id=message.chat.id,
+            message_ids=[message.message_id]
+        )
+    except Exception:
+        try:
+            # Резервный метод
+            await bot.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+        except Exception as e:
+            logger.warning(
+                "Не удалось удалить сообщение замученного %s: %s",
+                message.from_user.id if message.from_user else "?", e
+            )
+
+
 @router.business_message()
 async def on_business_message(message: Message):
     """
     Ловит все business-сообщения.
-    Если отправитель замучен — немедленно удаляет сообщение.
+    Если отправитель замучен — удаляет сообщение через 0.1 сек.
     Сообщения самого владельца не трогает.
     """
     if not message.from_user:
@@ -40,15 +64,8 @@ async def on_business_message(message: Message):
         return
 
     if await is_muted(sender_id):
-        try:
-            # Используем bot.delete_message с business_connection_id для надёжности
-            bot: Bot = message.bot
-            await bot.delete_message(
-                chat_id=message.chat.id,
-                message_id=message.message_id
-            )
-        except Exception as e:
-            logger.warning("Не удалось удалить сообщение замученного %s: %s", sender_id, e)
+        bot: Bot = message.bot
+        asyncio.create_task(_delete_business_message(bot, message))
 
 
 @router.edited_business_message()
@@ -63,14 +80,8 @@ async def on_edited_business_message(message: Message):
         return
 
     if await is_muted(sender_id):
-        try:
-            bot: Bot = message.bot
-            await bot.delete_message(
-                chat_id=message.chat.id,
-                message_id=message.message_id
-            )
-        except Exception as e:
-            logger.warning("Не удалось удалить отредактированное сообщение замученного %s: %s", sender_id, e)
+        bot: Bot = message.bot
+        asyncio.create_task(_delete_business_message(bot, message))
 
 
 @router.deleted_business_messages()
