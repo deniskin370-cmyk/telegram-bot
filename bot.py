@@ -21,6 +21,8 @@ ALLOWED_UPDATES = [
     "edited_message",
     "callback_query",
     "inline_query",
+    "pre_checkout_query",
+    "shipping_query",
     "business_connection",
     "business_message",
     "edited_business_message",
