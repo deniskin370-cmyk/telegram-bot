@@ -33,7 +33,7 @@ COMMANDS_TEXT = """
 
 <b>.mute [время]</b>
 Мутит пользователя (нужно ответить на его сообщение).
-Время указывай в формате: <code>5m</code> (минуты), <code>1h</code> (часы), <code>1d</code> (дни)
+Время: <code>5m</code> (минуты), <code>1h</code> (часы), <code>1d</code> (дни)
 <i>Пример:</i> <code>.mute 10m</code>
 
 ⚠️ Команды работают только при активном ключе!
@@ -50,13 +50,12 @@ async def cmd_start(message: Message):
         reply_markup=main_menu(is_admin=admin),
         parse_mode="HTML"
     )
-    # Отправляем туториал новым пользователям автоматически
     activated = await is_user_activated(message.from_user.id)
     if not activated and message.from_user.id != CREATOR_ID:
         await message.answer(
             "📌 <b>Первый шаг — получи ключ активации!</b>\n\n"
             "Без ключа бот не будет работать в твоих чатах.\n"
-            "Нажми <b>⚙️ Настройка чатов</b> → <b>Ввести ключ активации</b>.",
+            "Нажми <b>⚙️ Настройка чатов</b> → <b>Ввести ключ ниже</b>.",
             parse_mode="HTML"
         )
 
@@ -95,26 +94,35 @@ async def cb_commands(callback: CallbackQuery):
 async def cb_chat_settings(callback: CallbackQuery):
     activated = await is_user_activated(callback.from_user.id)
     activation = await get_activation(callback.from_user.id)
+    is_creator = callback.from_user.id == CREATOR_ID
 
-    if activated and activation:
+    if is_creator:
+        status_line = "✅ Создатель — бот всегда активен"
+    elif activated and activation:
         expires = activation.get("expires_at")
         if expires:
             status_line = f"✅ Бот активен до: <code>{expires}</code>"
         else:
             status_line = "✅ Бот активирован навсегда"
-    elif callback.from_user.id == CREATOR_ID:
-        status_line = "✅ Создатель — бот всегда активен"
     else:
         status_line = "❌ Бот не активирован"
 
-    text = (
-        "⚙️ <b>Настройка чатов</b>\n\n"
-        f"{status_line}\n\n"
-        "Для работы бота во всех твоих чатах необходим активный ключ.\n"
-        "Получи ключ у администратора и введи его ниже."
-    )
+    if activated or is_creator:
+        intro = (
+            "⚙️ <b>Настройка чатов</b>\n\n"
+            f"{status_line}\n\n"
+            "Бот подключён и готов к работе в твоих чатах."
+        )
+    else:
+        intro = (
+            "⚙️ <b>Настройка чатов</b>\n\n"
+            f"{status_line}\n\n"
+            "Для работы бота необходим ключ активации.\n"
+            "👇 <b>Введите ключ ниже</b> — нажмите кнопку и отправьте ключ."
+        )
+
     await callback.message.edit_text(
-        text,
-        reply_markup=chat_settings_menu(activated or callback.from_user.id == CREATOR_ID),
+        intro,
+        reply_markup=chat_settings_menu(activated or is_creator),
         parse_mode="HTML"
     )

@@ -12,7 +12,7 @@ from database import (
     is_admin, add_admin, remove_admin, get_all_admins,
     create_key, get_all_keys
 )
-from keyboards import admin_panel_menu, key_duration_menu, back_button
+from keyboards import admin_panel_menu, key_unit_menu, key_amount_menu, back_button
 from config import CREATOR_ID
 
 router = Router()
@@ -27,7 +27,6 @@ class AdminFilter(Filter):
 class AdminState(StatesGroup):
     waiting_for_admin_id = State()
     waiting_for_remove_admin_id = State()
-    waiting_for_key_duration_choice = State()
 
 
 def generate_key(length: int = 16) -> str:
@@ -48,44 +47,107 @@ async def cb_admin_panel(callback: CallbackQuery):
     )
 
 
-# ─── Создать ключ ─────────────────────────────────────────────────────────────
+# ─── Создать ключ: Шаг 1 — выбор единицы ─────────────────────────────────────
 
 @router.callback_query(F.data == "admin_create_key")
 async def cb_create_key(callback: CallbackQuery):
     if not await is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
     await callback.message.edit_text(
-        "⏳ <b>Выбери срок действия ключа</b>",
-        reply_markup=key_duration_menu(),
+        "⏳ <b>Создание ключа — Шаг 1</b>\n\n"
+        "Выбери единицу времени для срока действия ключа:",
+        reply_markup=key_unit_menu(),
         parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data.startswith("duration_"))
-async def cb_key_duration(callback: CallbackQuery):
+# ─── Создать ключ: Шаг 2 — выбор количества ──────────────────────────────────
+
+@router.callback_query(F.data.startswith("kunit_"))
+async def cb_key_unit(callback: CallbackQuery):
     if not await is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
 
-    duration_map = {
-        "duration_1d": ("1 день", timedelta(days=1)),
-        "duration_7d": ("7 дней", timedelta(days=7)),
-        "duration_30d": ("30 дней", timedelta(days=30)),
-        "duration_forever": ("Навсегда", None),
+    unit = callback.data.replace("kunit_", "")  # hours / days / months / forever
+
+    if unit == "forever":
+        # Сразу создаём ключ навсегда
+        key = generate_key()
+        success = await create_key(key, callback.from_user.id, None)
+        if success:
+            await callback.message.edit_text(
+                f"✅ <b>Ключ создан!</b>\n\n"
+                f"🔑 Ключ: <code>{key}</code>\n"
+                f"⏳ Срок действия: <b>♾ Навсегда</b>\n"
+                f"👤 Для: 1 пользователя\n\n"
+                "Скопируй и передай пользователю.",
+                reply_markup=back_button("admin_panel"),
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.edit_text(
+                "❌ Ошибка при создании ключа.",
+                reply_markup=back_button("admin_panel"),
+                parse_mode="HTML"
+            )
+        return
+
+    unit_labels = {"hours": "часы", "days": "дни", "months": "месяцы"}
+    await callback.message.edit_text(
+        f"⏳ <b>Создание ключа — Шаг 2</b>\n\n"
+        f"Единица: <b>{unit_labels.get(unit, unit)}</b>\n"
+        "Выбери количество:",
+        reply_markup=key_amount_menu(unit),
+        parse_mode="HTML"
+    )
+
+
+# ─── Создать ключ: финал — создание после выбора количества ──────────────────
+
+@router.callback_query(F.data.startswith("kamount_"))
+async def cb_key_amount(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return await callback.answer("⛔ Нет доступа.", show_alert=True)
+
+    # kamount_hours_3 / kamount_days_7 / kamount_months_1
+    parts = callback.data.split("_")  # ['kamount', 'hours', '3']
+    if len(parts) != 3:
+        return await callback.answer("❌ Ошибка формата.", show_alert=True)
+
+    unit = parts[1]
+    try:
+        amount = int(parts[2])
+    except ValueError:
+        return await callback.answer("❌ Ошибка формата.", show_alert=True)
+
+    unit_seconds = {"hours": 3600, "days": 86400, "months": 2592000}  # month = 30d
+    seconds = amount * unit_seconds[unit]
+    expires_at = (datetime.now() + timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
+    unit_labels = {
+        "hours": ("ч", "час", "часа", "часов"),
+        "days": ("д", "день", "дня", "дней"),
+        "months": ("мес", "месяц", "месяца", "месяцев"),
     }
-    label, delta = duration_map.get(callback.data, ("Навсегда", None))
+    short, f1, f2, f5 = unit_labels[unit]
+
+    if amount == 1:
+        label = f"{amount} {f1}"
+    elif 2 <= amount <= 4:
+        label = f"{amount} {f2}"
+    else:
+        label = f"{amount} {f5}"
 
     key = generate_key()
-    expires_at = None
-    if delta:
-        expires_at = (datetime.now() + delta).strftime("%Y-%m-%d %H:%M:%S")
-
     success = await create_key(key, callback.from_user.id, expires_at)
+
     if success:
-        expires_text = f"<code>{expires_at}</code>" if expires_at else "♾ Навсегда"
         await callback.message.edit_text(
             f"✅ <b>Ключ создан!</b>\n\n"
             f"🔑 Ключ: <code>{key}</code>\n"
-            f"⏳ Срок действия: {label} ({expires_text})\n\n"
+            f"⏳ Срок действия: <b>{label}</b>\n"
+            f"📅 Истекает: <code>{expires_at}</code>\n"
+            f"👤 Для: 1 пользователя\n\n"
             "Скопируй и передай пользователю.",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML"
@@ -109,14 +171,14 @@ async def cb_list_keys(callback: CallbackQuery):
     if not keys:
         text = "📋 <b>Ключи не найдены.</b>"
     else:
-        lines = ["📋 <b>Последние ключи:</b>\n"]
+        lines = ["📋 <b>Последние ключи (до 50):</b>\n"]
         for k in keys:
             status = "✅" if k["is_active"] else "❌"
-            expires = k["expires_at"] or "навсегда"
+            used = f"👤 {k['used_by']}" if k.get("used_by") else "🔓 Свободен"
+            exp = k.get("expires_at") or "♾"
             lines.append(
                 f"{status} <code>{k['key']}</code>\n"
-                f"   Истекает: {expires}\n"
-                f"   Создан: {k['created_at']}\n"
+                f"   {used} | до {exp}\n"
             )
         text = "\n".join(lines)
 
@@ -137,8 +199,7 @@ async def cb_add_admin(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "👤 <b>Добавить администратора</b>\n\n"
         "Отправь <b>Telegram ID</b> пользователя, которого хочешь сделать администратором.\n\n"
-        "Как узнать ID: попроси пользователя написать боту /start и перешли ID.\n"
-        "Или используй @userinfobot",
+        "<i>ID можно узнать через @userinfobot</i>",
         reply_markup=back_button("admin_panel"),
         parse_mode="HTML"
     )
@@ -151,12 +212,11 @@ async def process_add_admin(message: Message, state: FSMContext):
         return
     await state.clear()
     try:
-        new_admin_id = int(message.text.strip())
-        username = f"User_{new_admin_id}"
-        success = await add_admin(new_admin_id, username)
+        target_id = int(message.text.strip())
+        success = await add_admin(target_id)
         if success:
             await message.answer(
-                f"✅ Пользователь <code>{new_admin_id}</code> назначен администратором!",
+                f"✅ Пользователь <code>{target_id}</code> назначен администратором.",
                 reply_markup=back_button("admin_panel"),
                 parse_mode="HTML"
             )
@@ -185,13 +245,10 @@ async def cb_list_admins(callback: CallbackQuery):
     if not admins:
         text = "👥 <b>Администраторы не найдены.</b>"
     else:
-        lines = ["👥 <b>Список администраторов:</b>\n"]
+        lines = ["👥 <b>Администраторы:</b>\n"]
         for a in admins:
-            is_creator = "👑 " if a["user_id"] == CREATOR_ID else ""
-            lines.append(
-                f"{is_creator}<code>{a['user_id']}</code> — {a['username']}\n"
-                f"   Добавлен: {a['added_at']}"
-            )
+            crown = "👑 " if a["user_id"] == CREATOR_ID else ""
+            lines.append(f"{crown}<code>{a['user_id']}</code> — {a.get('username') or '—'}")
         text = "\n".join(lines)
 
     await callback.message.edit_text(

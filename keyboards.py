@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
 def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -19,12 +19,11 @@ def back_button(callback: str = "start") -> InlineKeyboardMarkup:
 
 
 def chat_settings_menu(activated: bool) -> InlineKeyboardMarkup:
-    status = "✅ Бот активен" if activated else "❌ Бот не активирован"
-    buttons = [
-        [InlineKeyboardButton(text=status, callback_data="key_status")],
-    ]
-    if not activated:
-        buttons.append([InlineKeyboardButton(text="🔑 Ввести ключ активации", callback_data="enter_key")])
+    buttons = []
+    if activated:
+        buttons.append([InlineKeyboardButton(text="✅ Бот активирован", callback_data="key_status")])
+    else:
+        buttons.append([InlineKeyboardButton(text="🔑 Ввести ключ ниже", callback_data="enter_key")])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="start")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -40,15 +39,42 @@ def admin_panel_menu() -> InlineKeyboardMarkup:
     ])
 
 
-def key_duration_menu() -> InlineKeyboardMarkup:
+def key_unit_menu() -> InlineKeyboardMarkup:
+    """Шаг 1: выбор единицы времени."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="1 день", callback_data="duration_1d"),
-            InlineKeyboardButton(text="7 дней", callback_data="duration_7d"),
+            InlineKeyboardButton(text="⏰ Часы", callback_data="kunit_hours"),
+            InlineKeyboardButton(text="📅 Дни", callback_data="kunit_days"),
         ],
         [
-            InlineKeyboardButton(text="30 дней", callback_data="duration_30d"),
-            InlineKeyboardButton(text="♾ Навсегда", callback_data="duration_forever"),
+            InlineKeyboardButton(text="📆 Месяцы", callback_data="kunit_months"),
+            InlineKeyboardButton(text="♾ Навсегда", callback_data="kunit_forever"),
         ],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")],
     ])
+
+
+def key_amount_menu(unit: str) -> InlineKeyboardMarkup:
+    """Шаг 2: выбор количества."""
+    if unit == "hours":
+        amounts = [1, 2, 3, 4, 5, 6, 12, 24]
+        label = "ч"
+    elif unit == "days":
+        amounts = [1, 2, 3, 4, 5, 7, 14, 30]
+        label = "д"
+    else:  # months
+        amounts = [1, 2, 3, 6, 12]
+        label = "мес"
+
+    buttons = []
+    row = []
+    for i, a in enumerate(amounts):
+        row.append(InlineKeyboardButton(
+            text=f"{a}{label}",
+            callback_data=f"kamount_{unit}_{a}"
+        ))
+        if len(row) == 4 or i == len(amounts) - 1:
+            buttons.append(row)
+            row = []
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_create_key")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
