@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from config import BOT_TOKEN
 from database import init_db
-from handlers import start, keys, admin, commands, business
+from handlers import start, keys, admin, commands, business, buy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,7 +16,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# All update types needed, including Business Mode
 ALLOWED_UPDATES = [
     "message",
     "edited_message",
@@ -39,11 +38,12 @@ async def main():
     )
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Register routers
+    # Порядок важен: commands и buy — до business (чтобы .mute/.spam перехватывались первыми)
     dp.include_router(start.router)
     dp.include_router(keys.router)
     dp.include_router(admin.router)
     dp.include_router(commands.router)
+    dp.include_router(buy.router)
     dp.include_router(business.router)
 
     logger.info("Bot starting...")

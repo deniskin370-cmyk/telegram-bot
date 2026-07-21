@@ -1,7 +1,6 @@
 """
 Database layer — только PostgreSQL (Neon / Railway).
 Для подключения установи переменную окружения DATABASE_URL.
-Данные (ключи, админы, пользователи) НЕ сбрасываются при перезапуске бота.
 """
 import os
 import asyncpg
@@ -168,6 +167,52 @@ async def get_all_keys() -> list[dict]:
         return result
 
 
+async def deactivate_key(key_text: str) -> bool:
+    """Обнуляет (деактивирует) ключ по его коду."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE keys SET is_active = FALSE WHERE key = $1",
+                key_text
+            )
+            return result != "UPDATE 0"
+    except Exception:
+        return False
+
+
+# ─── Stats ────────────────────────────────────────────────────────────────────
+
+async def get_stats() -> dict:
+    """Возвращает статистику бота."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total_users = await conn.fetchval("SELECT COUNT(*) FROM activations")
+        active_users = await conn.fetchval(
+            "SELECT COUNT(*) FROM activations WHERE expires_at IS NULL OR expires_at > NOW()"
+        )
+        total_admins = await conn.fetchval("SELECT COUNT(*) FROM admins")
+        total_keys = await conn.fetchval("SELECT COUNT(*) FROM keys")
+        active_keys = await conn.fetchval(
+            "SELECT COUNT(*) FROM keys WHERE is_active = TRUE AND used_by IS NULL"
+        )
+        used_keys = await conn.fetchval(
+            "SELECT COUNT(*) FROM keys WHERE used_by IS NOT NULL"
+        )
+        muted_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM muted_users WHERE muted_until > NOW()"
+        )
+    return {
+        "total_users": total_users or 0,
+        "active_users": active_users or 0,
+        "total_admins": total_admins or 0,
+        "total_keys": total_keys or 0,
+        "active_keys": active_keys or 0,
+        "used_keys": used_keys or 0,
+        "muted_count": muted_count or 0,
+    }
+
+
 # ─── Activations ──────────────────────────────────────────────────────────────
 
 async def activate_user(user_id: int, key: str, expires_at: str | None) -> bool:
@@ -228,7 +273,7 @@ async def get_activation(user_id: int) -> dict | None:
         return d
 
 
-# ─── Mute (для ЛС через business mode) ───────────────────────────────────────
+# ─── Mute ─────────────────────────────────────────────────────────────────────
 
 async def mute_user(user_id: int, muted_until: datetime) -> bool:
     try:

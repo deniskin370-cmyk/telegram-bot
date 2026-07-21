@@ -10,7 +10,7 @@ from aiogram.filters import Filter
 
 from database import (
     is_admin, add_admin, remove_admin, get_all_admins,
-    create_key, get_all_keys
+    create_key, get_all_keys, get_stats, deactivate_key
 )
 from keyboards import admin_panel_menu, key_unit_menu, key_amount_menu, back_button
 from config import CREATOR_ID
@@ -27,6 +27,7 @@ class AdminFilter(Filter):
 class AdminState(StatesGroup):
     waiting_for_admin_id = State()
     waiting_for_remove_admin_id = State()
+    waiting_for_deactivate_key = State()
 
 
 def generate_key(length: int = 16) -> str:
@@ -34,52 +35,74 @@ def generate_key(length: int = 16) -> str:
     return ''.join(random.choices(chars, k=length))
 
 
+# ─── Панель администратора ────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "admin_panel")
 async def cb_admin_panel(callback: CallbackQuery):
     if not await is_admin(callback.from_user.id):
-        await callback.answer("⛔ У тебя нет доступа к панели администратора.", show_alert=True)
-        return
+        return await callback.answer("⛔ Нет доступа.", show_alert=True)
     await callback.message.edit_text(
-        "🔑 <b>Панель администратора</b>\n\n"
-        "Выбери действие:",
+        "🔑 <b>Панель администратора</b>\n\nВыбери действие:",
         reply_markup=admin_panel_menu(),
         parse_mode="HTML"
     )
 
 
-# ─── Создать ключ: Шаг 1 — выбор единицы ─────────────────────────────────────
+# ─── Статистика ───────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin_stats")
+async def cb_stats(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return await callback.answer("⛔ Нет доступа.", show_alert=True)
+
+    s = await get_stats()
+    text = (
+        "📊 <b>Статистика бота</b>\n\n"
+        f"👥 Всего пользователей: <b>{s['total_users']}</b>\n"
+        f"✅ Активных пользователей: <b>{s['active_users']}</b>\n"
+        f"👮 Администраторов: <b>{s['total_admins']}</b>\n\n"
+        f"🔑 Всего ключей создано: <b>{s['total_keys']}</b>\n"
+        f"🔓 Свободных ключей: <b>{s['active_keys']}</b>\n"
+        f"🔒 Использованных ключей: <b>{s['used_keys']}</b>\n\n"
+        f"🔇 Замучено пользователей: <b>{s['muted_count']}</b>"
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=back_button("admin_panel"),
+        parse_mode="HTML"
+    )
+
+
+# ─── Создать ключ: Шаг 1 ─────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin_create_key")
 async def cb_create_key(callback: CallbackQuery):
     if not await is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
     await callback.message.edit_text(
-        "⏳ <b>Создание ключа — Шаг 1</b>\n\n"
-        "Выбери единицу времени для срока действия ключа:",
+        "⏳ <b>Создание ключа — Шаг 1</b>\n\nВыбери единицу времени:",
         reply_markup=key_unit_menu(),
         parse_mode="HTML"
     )
 
 
-# ─── Создать ключ: Шаг 2 — выбор количества ──────────────────────────────────
+# ─── Создать ключ: Шаг 2 ─────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("kunit_"))
 async def cb_key_unit(callback: CallbackQuery):
     if not await is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
 
-    unit = callback.data.replace("kunit_", "")  # hours / days / months / forever
+    unit = callback.data.replace("kunit_", "")
 
     if unit == "forever":
-        # Сразу создаём ключ навсегда
         key = generate_key()
         success = await create_key(key, callback.from_user.id, None)
         if success:
             await callback.message.edit_text(
                 f"✅ <b>Ключ создан!</b>\n\n"
                 f"🔑 Ключ: <code>{key}</code>\n"
-                f"⏳ Срок действия: <b>♾ Навсегда</b>\n"
-                f"👤 Для: 1 пользователя\n\n"
+                f"⏳ Срок: <b>♾ Навсегда</b>\n\n"
                 "Скопируй и передай пользователю.",
                 reply_markup=back_button("admin_panel"),
                 parse_mode="HTML"
@@ -95,22 +118,20 @@ async def cb_key_unit(callback: CallbackQuery):
     unit_labels = {"hours": "часы", "days": "дни", "months": "месяцы"}
     await callback.message.edit_text(
         f"⏳ <b>Создание ключа — Шаг 2</b>\n\n"
-        f"Единица: <b>{unit_labels.get(unit, unit)}</b>\n"
-        "Выбери количество:",
+        f"Единица: <b>{unit_labels.get(unit, unit)}</b>\nВыбери количество:",
         reply_markup=key_amount_menu(unit),
         parse_mode="HTML"
     )
 
 
-# ─── Создать ключ: финал — создание после выбора количества ──────────────────
+# ─── Создать ключ: финал ─────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("kamount_"))
 async def cb_key_amount(callback: CallbackQuery):
     if not await is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
 
-    # kamount_hours_3 / kamount_days_7 / kamount_months_1
-    parts = callback.data.split("_")  # ['kamount', 'hours', '3']
+    parts = callback.data.split("_")
     if len(parts) != 3:
         return await callback.answer("❌ Ошибка формата.", show_alert=True)
 
@@ -120,17 +141,16 @@ async def cb_key_amount(callback: CallbackQuery):
     except ValueError:
         return await callback.answer("❌ Ошибка формата.", show_alert=True)
 
-    unit_seconds = {"hours": 3600, "days": 86400, "months": 2592000}  # month = 30d
+    unit_seconds = {"hours": 3600, "days": 86400, "months": 2592000}
     seconds = amount * unit_seconds[unit]
     expires_at = (datetime.now() + timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
 
     unit_labels = {
-        "hours": ("ч", "час", "часа", "часов"),
-        "days": ("д", "день", "дня", "дней"),
-        "months": ("мес", "месяц", "месяца", "месяцев"),
+        "hours": ("час", "часа", "часов"),
+        "days": ("день", "дня", "дней"),
+        "months": ("месяц", "месяца", "месяцев"),
     }
-    short, f1, f2, f5 = unit_labels[unit]
-
+    f1, f2, f5 = unit_labels[unit]
     if amount == 1:
         label = f"{amount} {f1}"
     elif 2 <= amount <= 4:
@@ -145,9 +165,8 @@ async def cb_key_amount(callback: CallbackQuery):
         await callback.message.edit_text(
             f"✅ <b>Ключ создан!</b>\n\n"
             f"🔑 Ключ: <code>{key}</code>\n"
-            f"⏳ Срок действия: <b>{label}</b>\n"
-            f"📅 Истекает: <code>{expires_at}</code>\n"
-            f"👤 Для: 1 пользователя\n\n"
+            f"⏳ Срок: <b>{label}</b>\n"
+            f"📅 Истекает: <code>{expires_at}</code>\n\n"
             "Скопируй и передай пользователю.",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML"
@@ -189,6 +208,43 @@ async def cb_list_keys(callback: CallbackQuery):
     )
 
 
+# ─── Обнулить ключ ────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin_deactivate_key")
+async def cb_deactivate_key(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return await callback.answer("⛔ Нет доступа.", show_alert=True)
+    await state.set_state(AdminState.waiting_for_deactivate_key)
+    await callback.message.edit_text(
+        "🚫 <b>Обнулить ключ</b>\n\n"
+        "Отправь ключ, который хочешь деактивировать.",
+        reply_markup=back_button("admin_panel"),
+        parse_mode="HTML"
+    )
+
+
+@router.message(AdminState.waiting_for_deactivate_key)
+async def process_deactivate_key(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await state.clear()
+        return
+    await state.clear()
+    key_text = message.text.strip()
+    success = await deactivate_key(key_text)
+    if success:
+        await message.answer(
+            f"✅ Ключ <code>{key_text}</code> деактивирован.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            "❌ Ключ не найден. Проверь правильность.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML"
+        )
+
+
 # ─── Добавить администратора ──────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin_add_admin")
@@ -198,7 +254,7 @@ async def cb_add_admin(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_for_admin_id)
     await callback.message.edit_text(
         "👤 <b>Добавить администратора</b>\n\n"
-        "Отправь <b>Telegram ID</b> пользователя, которого хочешь сделать администратором.\n\n"
+        "Отправь <b>Telegram ID</b> пользователя.\n"
         "<i>ID можно узнать через @userinfobot</i>",
         reply_markup=back_button("admin_panel"),
         parse_mode="HTML"
@@ -267,7 +323,7 @@ async def cb_remove_admin(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_for_remove_admin_id)
     await callback.message.edit_text(
         "🗑 <b>Удалить администратора</b>\n\n"
-        "Отправь <b>Telegram ID</b> администратора, которого хочешь снять с должности.",
+        "Отправь <b>Telegram ID</b> администратора.",
         reply_markup=back_button("admin_panel"),
         parse_mode="HTML"
     )
@@ -283,7 +339,7 @@ async def process_remove_admin(message: Message, state: FSMContext):
         target_id = int(message.text.strip())
         if target_id == CREATOR_ID:
             await message.answer(
-                "⛔ Нельзя снять создателя бота с прав администратора.",
+                "⛔ Нельзя снять создателя бота.",
                 reply_markup=back_button("admin_panel"),
                 parse_mode="HTML"
             )

@@ -1,34 +1,22 @@
 import asyncio
-import re
 from datetime import datetime, timedelta
 
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, ChatPermissions
 
-from database import is_user_activated, mute_user, is_muted
+from database import is_user_activated, mute_user, unmute_user, is_muted
+from config import CREATOR_ID
 
 router = Router()
 
 
-def parse_duration(duration_str: str) -> int | None:
-    match = re.fullmatch(r"(\d+)(m|h|d)", duration_str.lower())
-    if not match:
-        return None
-    value, unit = int(match.group(1)), match.group(2)
-    multipliers = {"m": 60, "h": 3600, "d": 86400}
-    return value * multipliers[unit]
-
-
-def format_time(seconds: int) -> str:
-    if seconds < 3600:
-        mins = seconds // 60
-        return f"{mins} мин."
-    elif seconds < 86400:
-        hours = seconds // 3600
-        return f"{hours} ч."
+def format_time(minutes: int) -> str:
+    if minutes < 60:
+        return f"{minutes} мин."
+    elif minutes < 1440:
+        return f"{minutes // 60} ч."
     else:
-        days = seconds // 86400
-        return f"{days} д."
+        return f"{minutes // 1440} д."
 
 
 # ─── .spam ────────────────────────────────────────────────────────────────────
@@ -37,7 +25,7 @@ async def _do_spam(message: Message):
     if not await is_user_activated(message.from_user.id):
         await message.answer(
             "❌ <b>Бот не активирован!</b>\n\n"
-            "Введи ключ активации в разделе <b>⚙️ Настройка чатов</b>."
+            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ."
         )
         return
 
@@ -53,10 +41,7 @@ async def _do_spam(message: Message):
     try:
         count = int(parts[-1])
     except ValueError:
-        await message.reply(
-            "❌ <b>Количество должно быть числом!</b>\n"
-            "Пример: <code>.spam Привет! 5</code>"
-        )
+        await message.reply("❌ <b>Количество должно быть числом!</b>")
         return
 
     spam_text = " ".join(parts[1:-1])
@@ -65,13 +50,10 @@ async def _do_spam(message: Message):
         return
 
     if count < 1:
-        await message.reply("❌ Количество должно быть не менее 1.")
-        return
-
+        count = 1
     if count > 30:
         count = 30
 
-    # Удаляем команду и пишем уведомление
     try:
         await message.delete()
     except Exception:
@@ -79,59 +61,32 @@ async def _do_spam(message: Message):
 
     try:
         notify = await message.answer("📨 <b>Начинаю спам...</b>")
+        await asyncio.sleep(0.3)
+        await notify.delete()
     except Exception:
-        notify = None
-
-    # Небольшая пауза чтобы уведомление успело отправиться
-    await asyncio.sleep(0.3)
-
-    # Удаляем уведомление и спамим
-    if notify:
-        try:
-            await notify.delete()
-        except Exception:
-            pass
+        pass
 
     for i in range(count):
         try:
             await message.answer(spam_text)
             if i < count - 1:
-                await asyncio.sleep(0.1)  # быстрый спам
+                await asyncio.sleep(0.1)
         except Exception:
             break
 
 
-# ─── .mute в группах ──────────────────────────────────────────────────────────
+# ─── .mute в группе ───────────────────────────────────────────────────────────
 
-async def _do_mute_group(message: Message):
-    """Мут в обычной группе через ограничение прав."""
+async def _do_mute_group(message: Message, minutes: int):
     if not message.reply_to_message:
         await message.reply(
-            "❌ <b>Ответь на сообщение пользователя, которого хочешь замутить!</b>\n"
-            "Пример: ответь на сообщение → <code>.mute 10m</code>"
-        )
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.reply(
-            "❌ <b>Укажи время мута!</b>\n"
-            "Форматы: <code>5m</code> (мин), <code>1h</code> (час), <code>2d</code> (дни)\n"
-            "Пример: <code>.mute 10m</code>"
-        )
-        return
-
-    seconds = parse_duration(parts[1])
-    if seconds is None:
-        await message.reply(
-            "❌ <b>Неверный формат времени!</b>\n"
-            "Форматы: <code>5m</code> (мин), <code>1h</code> (час), <code>2d</code> (дни)"
+            "❌ <b>Ответь на сообщение пользователя которого хочешь замутить!</b>"
         )
         return
 
     target_user = message.reply_to_message.from_user
-    until_date = datetime.now() + timedelta(seconds=seconds)
-    time_text = format_time(seconds)
+    until_date = datetime.now() + timedelta(minutes=minutes)
+    time_text = format_time(minutes)
 
     try:
         await message.chat.restrict(
@@ -139,62 +94,35 @@ async def _do_mute_group(message: Message):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=until_date
         )
-
-        # Удаляем команду
         try:
             await message.delete()
         except Exception:
             pass
-
         await message.answer(
-            f"🔇 <b>{target_user.mention_html()} замучен</b>\n"
-            f"⏳ Срок: {time_text}\n"
+            f"🔇 <b>{target_user.mention_html()} замучен на {time_text}</b>\n"
             f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}"
         )
     except Exception as e:
         err = str(e)
         if "not enough rights" in err or "CHAT_ADMIN_REQUIRED" in err:
-            await message.reply(
-                "❌ <b>У бота недостаточно прав!</b>\n"
-                "Назначь бота администратором группы с правом ограничивать участников."
-            )
+            await message.reply("❌ <b>У бота нет прав администратора в этой группе!</b>")
         else:
-            await message.reply(f"❌ Не удалось замутить пользователя.\n<code>{err}</code>")
+            await message.reply(f"❌ Ошибка: <code>{err}</code>")
 
 
 # ─── .mute в ЛС (business mode) ──────────────────────────────────────────────
 
-async def _do_mute_dm(message: Message):
+async def _do_mute_dm(message: Message, minutes: int):
     """
-    Мут в личных сообщениях через business mode.
-    Замучивает собеседника: его следующие сообщения будут автоматически удаляться.
-    Использование: .mute 10m (в диалоге с нужным человеком)
+    Мутит собеседника в ЛС через business mode.
+    Все его входящие сообщения будут автоматически удаляться.
     """
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.reply(
-            "❌ <b>Укажи время мута!</b>\n"
-            "Форматы: <code>5m</code> (мин), <code>1h</code> (час), <code>2d</code> (дни)\n"
-            "Пример: <code>.mute 10m</code>"
-        )
-        return
-
-    seconds = parse_duration(parts[1])
-    if seconds is None:
-        await message.reply(
-            "❌ <b>Неверный формат времени!</b>\n"
-            "Форматы: <code>5m</code> (мин), <code>1h</code> (час), <code>2d</code> (дни)"
-        )
-        return
-
-    # В business DM: chat.id — это ID собеседника
-    target_id = message.chat.id
-    until_date = datetime.now() + timedelta(seconds=seconds)
-    time_text = format_time(seconds)
+    target_id = message.chat.id  # ID собеседника в DM
+    until_date = datetime.now() + timedelta(minutes=minutes)
+    time_text = format_time(minutes)
 
     success = await mute_user(target_id, until_date)
 
-    # Удаляем команду
     try:
         await message.delete()
     except Exception:
@@ -210,24 +138,72 @@ async def _do_mute_dm(message: Message):
         await message.answer("❌ Не удалось замутить пользователя.")
 
 
-# ─── Общая точка входа для .mute ─────────────────────────────────────────────
+# ─── .unmute в ЛС (business mode) ────────────────────────────────────────────
+
+async def _do_unmute_dm(message: Message):
+    """Снимает мут с собеседника в ЛС."""
+    target_id = message.chat.id
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    success = await unmute_user(target_id)
+    if success:
+        await message.answer("🔊 <b>Мут снят.</b> Пользователь снова может писать.")
+    else:
+        await message.answer("❌ Не удалось снять мут.")
+
+
+# ─── Общий разбор .mute [число] ───────────────────────────────────────────────
 
 async def _do_mute(message: Message):
     if not await is_user_activated(message.from_user.id):
         await message.answer(
             "❌ <b>Бот не активирован!</b>\n\n"
-            "Введи ключ активации в разделе <b>⚙️ Настройка чатов</b>."
+            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ."
+        )
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.reply(
+            "❌ <b>Укажи время в минутах!</b>\n"
+            "Пример: <code>.mute 10</code> — замутить на 10 минут"
+        )
+        return
+
+    try:
+        minutes = int(parts[1])
+        if minutes < 1:
+            raise ValueError
+    except ValueError:
+        await message.reply(
+            "❌ <b>Укажи целое число минут!</b>\n"
+            "Пример: <code>.mute 10</code>"
         )
         return
 
     if message.chat.type in ("group", "supergroup"):
-        await _do_mute_group(message)
+        await _do_mute_group(message, minutes)
     else:
-        # ЛС или business DM
-        await _do_mute_dm(message)
+        await _do_mute_dm(message, minutes)
 
 
-# ─── Обычные сообщения ────────────────────────────────────────────────────────
+async def _do_unmute(message: Message):
+    if not await is_user_activated(message.from_user.id):
+        await message.answer("❌ <b>Бот не активирован!</b>")
+        return
+
+    if message.chat.type in ("group", "supergroup"):
+        await message.reply("❌ Команда .unmute работает только в ЛС.")
+        return
+
+    await _do_unmute_dm(message)
+
+
+# ─── Обычные сообщения (в группах и личке) ────────────────────────────────────
 
 @router.message(F.text.startswith(".spam"))
 async def cmd_spam(message: Message):
@@ -239,11 +215,21 @@ async def cmd_mute(message: Message):
     await _do_mute(message)
 
 
-# ─── Business-сообщения (через «Автоматизацию чатов») ────────────────────────
+@router.message(F.text.startswith(".unmute"))
+async def cmd_unmute(message: Message):
+    await _do_unmute(message)
+
+
+# ─── Business-сообщения ───────────────────────────────────────────────────────
 
 @router.business_message(F.text.startswith(".spam"))
 async def cmd_spam_business(message: Message):
     await _do_spam(message)
+
+
+@router.business_message(F.text.startswith(".unmute"))
+async def cmd_unmute_business(message: Message):
+    await _do_unmute(message)
 
 
 @router.business_message(F.text.startswith(".mute"))

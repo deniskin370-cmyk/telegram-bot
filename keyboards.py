@@ -1,6 +1,6 @@
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+    ReplyKeyboardMarkup, KeyboardButton,
 )
 
 
@@ -9,8 +9,9 @@ from aiogram.types import (
 def main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Постоянная клавиатура внизу чата."""
     buttons = [
-        [KeyboardButton(text="⚙️ Настройка чатов"), KeyboardButton(text="📖 Как подключить")],
-        [KeyboardButton(text="📋 Мои команды")],
+        [KeyboardButton(text="⚙️ Настройка чатов"), KeyboardButton(text="🛒 Купить ключ")],
+        [KeyboardButton(text="📋 Мои команды"), KeyboardButton(text="💬 Поддержка")],
+        [KeyboardButton(text="📖 Как подключить")],
     ]
     if is_admin:
         buttons.append([KeyboardButton(text="🔑 Панель администратора")])
@@ -23,17 +24,6 @@ def main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 # ─── Inline-клавиатуры ────────────────────────────────────────────────────────
 
-def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text="⚙️ Настройка чатов", callback_data="chat_settings")],
-        [InlineKeyboardButton(text="📖 Как подключить бота", callback_data="tutorial")],
-        [InlineKeyboardButton(text="📋 Мои команды", callback_data="my_commands")],
-    ]
-    if is_admin:
-        buttons.append([InlineKeyboardButton(text="🔑 Панель администратора", callback_data="admin_panel")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
 def back_button(callback: str = "start") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data=callback)]]
@@ -45,15 +35,17 @@ def chat_settings_menu(activated: bool) -> InlineKeyboardMarkup:
     if activated:
         buttons.append([InlineKeyboardButton(text="✅ Бот активирован", callback_data="key_status")])
     else:
-        buttons.append([InlineKeyboardButton(text="🔑 Ввести ключ ниже", callback_data="enter_key")])
+        buttons.append([InlineKeyboardButton(text="🔑 Ввести ключ", callback_data="enter_key")])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="start")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def admin_panel_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="🔑 Создать ключ", callback_data="admin_create_key")],
         [InlineKeyboardButton(text="📋 Список ключей", callback_data="admin_list_keys")],
+        [InlineKeyboardButton(text="🚫 Обнулить ключ", callback_data="admin_deactivate_key")],
         [InlineKeyboardButton(text="👤 Добавить администратора", callback_data="admin_add_admin")],
         [InlineKeyboardButton(text="👥 Список администраторов", callback_data="admin_list_admins")],
         [InlineKeyboardButton(text="🗑 Удалить администратора", callback_data="admin_remove_admin")],
@@ -62,7 +54,6 @@ def admin_panel_menu() -> InlineKeyboardMarkup:
 
 
 def key_unit_menu() -> InlineKeyboardMarkup:
-    """Шаг 1: выбор единицы времени."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="⏰ Часы", callback_data="kunit_hours"),
@@ -77,7 +68,6 @@ def key_unit_menu() -> InlineKeyboardMarkup:
 
 
 def key_amount_menu(unit: str) -> InlineKeyboardMarkup:
-    """Шаг 2: выбор количества."""
     if unit == "hours":
         amounts = [1, 2, 3, 4, 5, 6, 12, 24]
         label = "ч"
@@ -100,3 +90,11 @@ def key_amount_menu(unit: str) -> InlineKeyboardMarkup:
             row = []
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_create_key")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def buy_key_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 1 неделя — 15 ⭐️", callback_data="buy_week")],
+        [InlineKeyboardButton(text="📆 1 месяц — 25 ⭐️", callback_data="buy_month")],
+        [InlineKeyboardButton(text="♾ Навсегда — 50 ⭐️", callback_data="buy_forever")],
+    ])
