@@ -94,7 +94,8 @@ def key_amount_menu(unit: str) -> InlineKeyboardMarkup:
 
 def buy_key_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌟 1 день — 1 ⭐️",    callback_data="buy_day")],
         [InlineKeyboardButton(text="📅 1 неделя — 15 ⭐️", callback_data="buy_week")],
-        [InlineKeyboardButton(text="📆 1 месяц — 25 ⭐️", callback_data="buy_month")],
-        [InlineKeyboardButton(text="♾ Навсегда — 50 ⭐️", callback_data="buy_forever")],
+        [InlineKeyboardButton(text="📆 1 месяц — 25 ⭐️",  callback_data="buy_month")],
+        [InlineKeyboardButton(text="♾ Навсегда — 50 ⭐️",  callback_data="buy_forever")],
     ])
