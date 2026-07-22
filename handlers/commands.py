@@ -25,7 +25,8 @@ async def _do_spam(message: Message):
     if not await is_user_activated(message.from_user.id):
         await message.answer(
             "❌ <b>Бот не активирован!</b>\n\n"
-            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ."
+            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ.",
+            parse_mode="HTML",
         )
         return
 
@@ -34,25 +35,23 @@ async def _do_spam(message: Message):
         await message.reply(
             "❌ <b>Неверный формат!</b>\n"
             "Использование: <code>.spam [текст] [количество]</code>\n"
-            "Пример: <code>.spam Привет! 5</code>"
+            "Пример: <code>.spam Привет! 5</code>",
+            parse_mode="HTML",
         )
         return
 
     try:
         count = int(parts[-1])
     except ValueError:
-        await message.reply("❌ <b>Количество должно быть числом!</b>")
+        await message.reply("❌ <b>Количество должно быть числом!</b>", parse_mode="HTML")
         return
 
     spam_text = " ".join(parts[1:-1])
     if not spam_text:
-        await message.reply("❌ <b>Укажи текст для спама!</b>")
+        await message.reply("❌ <b>Укажи текст для спама!</b>", parse_mode="HTML")
         return
 
-    if count < 1:
-        count = 1
-    if count > 30:
-        count = 30
+    count = max(1, min(count, 30))
 
     try:
         await message.delete()
@@ -60,7 +59,7 @@ async def _do_spam(message: Message):
         pass
 
     try:
-        notify = await message.answer("📨 <b>Начинаю спам...</b>")
+        notify = await message.answer("📨 <b>Начинаю спам...</b>", parse_mode="HTML")
         await asyncio.sleep(0.3)
         await notify.delete()
     except Exception:
@@ -80,7 +79,8 @@ async def _do_spam(message: Message):
 async def _do_mute_group(message: Message, minutes: int):
     if not message.reply_to_message:
         await message.reply(
-            "❌ <b>Ответь на сообщение пользователя которого хочешь замутить!</b>"
+            "❌ <b>Ответь на сообщение пользователя которого хочешь замутить!</b>",
+            parse_mode="HTML",
         )
         return
 
@@ -92,7 +92,7 @@ async def _do_mute_group(message: Message, minutes: int):
         await message.chat.restrict(
             user_id=target_user.id,
             permissions=ChatPermissions(can_send_messages=False),
-            until_date=until_date
+            until_date=until_date,
         )
         try:
             await message.delete()
@@ -100,24 +100,21 @@ async def _do_mute_group(message: Message, minutes: int):
             pass
         await message.answer(
             f"🔇 <b>{target_user.mention_html()} замучен на {time_text}</b>\n"
-            f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}"
+            f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}",
+            parse_mode="HTML",
         )
     except Exception as e:
         err = str(e)
         if "not enough rights" in err or "CHAT_ADMIN_REQUIRED" in err:
-            await message.reply("❌ <b>У бота нет прав администратора в этой группе!</b>")
+            await message.reply("❌ <b>У бота нет прав администратора в этой группе!</b>", parse_mode="HTML")
         else:
-            await message.reply(f"❌ Ошибка: <code>{err}</code>")
+            await message.reply(f"❌ Ошибка: <code>{err}</code>", parse_mode="HTML")
 
 
 # ─── .mute в ЛС (business mode) ──────────────────────────────────────────────
 
 async def _do_mute_dm(message: Message, minutes: int):
-    """
-    Мутит собеседника в ЛС через business mode.
-    Все его входящие сообщения будут автоматически удаляться.
-    """
-    target_id = message.chat.id  # ID собеседника в DM
+    target_id = message.chat.id
     until_date = datetime.now() + timedelta(minutes=minutes)
     time_text = format_time(minutes)
 
@@ -132,7 +129,8 @@ async def _do_mute_dm(message: Message, minutes: int):
         await message.answer(
             f"🔇 <b>Пользователь замучен на {time_text}</b>\n"
             f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}\n"
-            "Его сообщения будут автоматически удаляться."
+            "Его сообщения будут автоматически удаляться.",
+            parse_mode="HTML",
         )
     else:
         await message.answer("❌ Не удалось замутить пользователя.")
@@ -141,7 +139,6 @@ async def _do_mute_dm(message: Message, minutes: int):
 # ─── .unmute в ЛС (business mode) ────────────────────────────────────────────
 
 async def _do_unmute_dm(message: Message):
-    """Снимает мут с собеседника в ЛС."""
     target_id = message.chat.id
 
     try:
@@ -151,9 +148,83 @@ async def _do_unmute_dm(message: Message):
 
     success = await unmute_user(target_id)
     if success:
-        await message.answer("🔊 <b>Мут снят.</b> Пользователь снова может писать.")
+        await message.answer("🔊 <b>Мут снят.</b> Пользователь снова может писать.", parse_mode="HTML")
     else:
         await message.answer("❌ Не удалось снять мут.")
+
+
+# ─── .del [секунды] ───────────────────────────────────────────────────────────
+
+async def _do_del(message: Message, bot: Bot):
+    """
+    .del [N] — удаляет все сохранённые входящие сообщения из этого чата
+    через N секунд. Если N не указан — удаляет сразу.
+    """
+    if not await is_user_activated(message.from_user.id):
+        await message.answer(
+            "❌ <b>Бот не активирован!</b>\n\n"
+            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ.",
+            parse_mode="HTML",
+        )
+        return
+
+    if not message.business_connection_id:
+        await message.reply(
+            "❌ Команда <code>.del</code> работает только в бизнес-чатах.",
+            parse_mode="HTML",
+        )
+        return
+
+    parts = message.text.split()
+    seconds = 0
+    if len(parts) >= 2:
+        try:
+            seconds = int(parts[1])
+            if seconds < 0:
+                raise ValueError
+        except ValueError:
+            await message.reply(
+                "❌ Укажи целое число секунд.\nПример: <code>.del 30</code>",
+                parse_mode="HTML",
+            )
+            return
+
+    chat_id = message.chat.id
+    bc_id = message.business_connection_id
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    if seconds > 0:
+        notice = await message.answer(
+            f"🗑 <b>Чат будет очищен через {seconds} сек.</b>",
+            parse_mode="HTML",
+        )
+        await asyncio.sleep(seconds)
+        try:
+            await notice.delete()
+        except Exception:
+            pass
+
+    # Импортируем message_store из business.py
+    from handlers.business import message_store, delete_business_messages_bulk
+
+    ids = message_store.get(chat_id, [])
+    if not ids:
+        await message.answer("ℹ️ Нет сохранённых сообщений для удаления.")
+        return
+
+    # Копируем и очищаем хранилище
+    to_delete = list(ids)
+    message_store[chat_id] = []
+
+    deleted = await delete_business_messages_bulk(bot, bc_id, chat_id, to_delete)
+    await message.answer(
+        f"🗑 <b>Удалено {deleted} из {len(to_delete)} сообщений.</b>",
+        parse_mode="HTML",
+    )
 
 
 # ─── Общий разбор .mute [число] ───────────────────────────────────────────────
@@ -162,7 +233,8 @@ async def _do_mute(message: Message):
     if not await is_user_activated(message.from_user.id):
         await message.answer(
             "❌ <b>Бот не активирован!</b>\n\n"
-            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ."
+            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ.",
+            parse_mode="HTML",
         )
         return
 
@@ -170,7 +242,8 @@ async def _do_mute(message: Message):
     if len(parts) < 2:
         await message.reply(
             "❌ <b>Укажи время в минутах!</b>\n"
-            "Пример: <code>.mute 10</code> — замутить на 10 минут"
+            "Пример: <code>.mute 10</code> — замутить на 10 минут",
+            parse_mode="HTML",
         )
         return
 
@@ -181,7 +254,8 @@ async def _do_mute(message: Message):
     except ValueError:
         await message.reply(
             "❌ <b>Укажи целое число минут!</b>\n"
-            "Пример: <code>.mute 10</code>"
+            "Пример: <code>.mute 10</code>",
+            parse_mode="HTML",
         )
         return
 
@@ -193,7 +267,7 @@ async def _do_mute(message: Message):
 
 async def _do_unmute(message: Message):
     if not await is_user_activated(message.from_user.id):
-        await message.answer("❌ <b>Бот не активирован!</b>")
+        await message.answer("❌ <b>Бот не активирован!</b>", parse_mode="HTML")
         return
 
     if message.chat.type in ("group", "supergroup"):
@@ -235,3 +309,13 @@ async def cmd_unmute_business(message: Message):
 @router.business_message(F.text.startswith(".mute"))
 async def cmd_mute_business(message: Message):
     await _do_mute(message)
+
+
+@router.business_message(F.text.startswith(".del"))
+async def cmd_del_business(message: Message, bot: Bot):
+    await _do_del(message, bot)
+
+
+@router.message(F.text.startswith(".del"))
+async def cmd_del(message: Message, bot: Bot):
+    await _do_del(message, bot)
