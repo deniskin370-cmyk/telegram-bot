@@ -29,8 +29,8 @@ class AdminState(StatesGroup):
     waiting_for_admin_input = State()
     waiting_for_remove_admin_input = State()
     waiting_for_deactivate_key = State()
-    waiting_for_gift_user = State()
-    waiting_for_gift_stars = State()
+    waiting_for_stars_user = State()
+    waiting_for_stars_amount = State()
 
 
 def generate_key(length: int = 16) -> str:
@@ -44,11 +44,9 @@ async def resolve_user(bot: Bot, text: str) -> tuple[int | None, str]:
     Возвращает (user_id, подпись) или (None, текст_ошибки).
     """
     text = text.strip()
-    # Числовой ID
     clean = text.lstrip('@')
     if clean.lstrip('-').isdigit():
         return int(clean), f"<code>{clean}</code>"
-    # Username
     username = clean if text.startswith('@') else text
     try:
         chat = await bot.get_chat(f"@{username}")
@@ -201,57 +199,80 @@ async def cb_key_amount(callback: CallbackQuery):
         )
 
 
-# ─── Отправить подарок с баланса бота (только CREATOR_ID) ────────────────────
+# ─── Выдать звёзды с баланса бота (только CREATOR_ID) ───────────────────────
 
-async def _get_gift_id(star_count: int) -> str | None:
-    """Ищет gift_id по количеству звёзд через Telegram API."""
+async def _send_stars_gift(user_id: int, stars: int) -> tuple[bool, str]:
+    """
+    Отправляет звёзды пользователю через sendGift (списывает со звёздного баланса бота).
+    Telegram не поддерживает прямой перевод звёзд — подарок это единственный способ.
+    """
     try:
+        # Получаем список доступных подарков
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/getAvailableGifts"
             ) as resp:
                 data = await resp.json()
+
         if not data.get("ok"):
-            return None
-        for gift in data["result"]["gifts"]:
-            if gift["star_count"] == star_count:
-                return gift["id"]
-    except Exception:
-        pass
-    return None
+            return False, "Не удалось получить список подарков."
 
+        gifts = data["result"].get("gifts", [])
 
-async def _send_gift(user_id: int, gift_id: str) -> tuple[bool, str]:
-    """Отправляет подарок пользователю. Возвращает (ok, error_text)."""
-    try:
+        # Ищем подарок с нужным количеством звёзд
+        gift_id = None
+        for gift in gifts:
+            if gift.get("star_count") == stars:
+                gift_id = gift["id"]
+                break
+
+        # Если точного совпадения нет — берём ближайший доступный
+        if not gift_id:
+            available = sorted(
+                [g for g in gifts if g.get("star_count", 0) <= stars],
+                key=lambda g: g["star_count"],
+                reverse=True,
+            )
+            if not available:
+                counts = [g.get("star_count", 0) for g in gifts]
+                return False, (
+                    f"Нет доступного подарка на {stars} ⭐️.\n"
+                    f"Доступные варианты: {', '.join(str(c) for c in sorted(counts))} ⭐️"
+                )
+            gift_id = available[0]["id"]
+            stars = available[0]["star_count"]
+
+        # Отправляем подарок
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendGift",
                 json={"user_id": user_id, "gift_id": gift_id},
             ) as resp:
-                data = await resp.json()
-        if data.get("ok"):
-            return True, ""
-        return False, data.get("description", "Unknown error")
+                result = await resp.json()
+
+        if result.get("ok"):
+            return True, str(stars)
+        return False, result.get("description", "Unknown error")
+
     except Exception as e:
         return False, str(e)
 
 
-@router.callback_query(F.data == "admin_send_gift")
-async def cb_send_gift(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "admin_send_stars")
+async def cb_send_stars(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != CREATOR_ID:
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
-    await state.set_state(AdminState.waiting_for_gift_user)
+    await state.set_state(AdminState.waiting_for_stars_user)
     await callback.message.edit_text(
-        "⭐️ <b>Отправить подарок пользователю</b>\n\n"
+        "💰 <b>Выдать звёзды с баланса</b>\n\n"
         "Отправь <b>@username</b> или <b>Telegram ID</b> получателя:",
         reply_markup=back_button("admin_panel"),
         parse_mode="HTML",
     )
 
 
-@router.message(AdminState.waiting_for_gift_user)
-async def process_gift_user(message: Message, state: FSMContext, bot: Bot):
+@router.message(AdminState.waiting_for_stars_user)
+async def process_stars_user(message: Message, state: FSMContext, bot: Bot):
     if message.from_user.id != CREATOR_ID:
         await state.clear()
         return
@@ -266,64 +287,54 @@ async def process_gift_user(message: Message, state: FSMContext, bot: Bot):
         )
         return
 
-    await state.update_data(gift_target_id=user_id, gift_target_label=label)
-    await state.set_state(AdminState.waiting_for_gift_stars)
+    await state.update_data(stars_target_id=user_id, stars_target_label=label)
+    await state.set_state(AdminState.waiting_for_stars_amount)
     await message.answer(
         f"👤 Получатель: {label}\n\n"
-        "Введи количество ⭐️ звёзд для подарка <b>(от 1 до 100000)</b>:",
+        "Введи количество ⭐️ звёзд <b>(от 1 до 1000000)</b>:",
         reply_markup=back_button("admin_panel"),
         parse_mode="HTML",
     )
 
 
-@router.message(AdminState.waiting_for_gift_stars)
-async def process_gift_stars(message: Message, state: FSMContext, bot: Bot):
+@router.message(AdminState.waiting_for_stars_amount)
+async def process_stars_amount(message: Message, state: FSMContext, bot: Bot):
     if message.from_user.id != CREATOR_ID:
         await state.clear()
         return
 
     try:
         stars = int(message.text.strip())
-        if not (1 <= stars <= 100000):
+        if not (1 <= stars <= 1_000_000):
             raise ValueError
     except ValueError:
         await message.answer(
-            "❌ Введи целое число от 1 до 100000.",
+            "❌ Введи целое число от 1 до 1000000.",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML",
         )
         return
 
     data = await state.get_data()
-    target_id = data.get("gift_target_id")
-    label = data.get("gift_target_label", str(target_id))
+    target_id = data.get("stars_target_id")
+    label = data.get("stars_target_label", str(target_id))
     await state.clear()
 
-    await message.answer(f"⏳ Ищу подарок на {stars} ⭐️ и отправляю...")
+    await message.answer(f"⏳ Отправляю {stars} ⭐️ пользователю {label}...")
 
-    gift_id = await _get_gift_id(stars)
-    if not gift_id:
-        await message.answer(
-            f"❌ <b>Подарок на {stars} ⭐️ не найден в Telegram.</b>\n"
-            "Такого подарка нет в магазине. Попробуй другое количество.",
-            reply_markup=back_button("admin_panel"),
-            parse_mode="HTML",
-        )
-        return
-
-    ok, err = await _send_gift(target_id, gift_id)
+    ok, info = await _send_stars_gift(target_id, stars)
     if ok:
         await message.answer(
-            f"✅ <b>Подарок отправлен!</b>\n\n"
+            f"✅ <b>Звёзды отправлены!</b>\n\n"
             f"👤 Получатель: {label}\n"
-            f"🎁 Подарок: {stars} ⭐️",
+            f"⭐️ Количество: {info}",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML",
         )
     else:
         await message.answer(
-            f"❌ <b>Не удалось отправить подарок</b>\n\n"
-            f"Ошибка: <code>{err}</code>\n\n"
+            f"❌ <b>Не удалось отправить звёзды</b>\n\n"
+            f"<code>{info}</code>\n\n"
             "Убедись, что на балансе бота достаточно звёзд.",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML",
