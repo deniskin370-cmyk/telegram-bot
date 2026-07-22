@@ -129,7 +129,8 @@ async def _do_mute_dm(message: Message, minutes: int):
         await message.answer(
             f"🔇 <b>Пользователь замучен на {time_text}</b>\n"
             f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}\n"
-            "Его сообщения будут автоматически удаляться.",
+            "Его сообщения будут автоматически удаляться (Connected Bots) "
+            "или получат авто-ответ об отклонении (Автоматизация чатов).",
             parse_mode="HTML",
         )
     else:

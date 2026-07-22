@@ -28,10 +28,10 @@ async def delete_business_msg(
     business_connection_id: str,
     chat_id: int,
     message_id: int,
-):
-    """Удаляет одно business-сообщение через aiogram native method."""
+) -> bool:
+    """Удаляет одно business-сообщение. Возвращает True если успешно."""
     if not business_connection_id:
-        logger.error("business_connection_id is None — удаление невозможно")
+        logger.warning("business_connection_id is None — удаление невозможно")
         return False
 
     try:
@@ -43,20 +43,7 @@ async def delete_business_msg(
         logger.info("Удалено сообщение %s в чате %s", message_id, chat_id)
         return True
     except TelegramBadRequest as e:
-        err = str(e)
-        logger.warning("Не удалось удалить сообщение %s: %s", message_id, err)
-        # Уведомляем создателя бота только о неожиданных ошибках
-        if "not found" not in err.lower() and CREATOR_ID:
-            try:
-                await bot.send_message(
-                    CREATOR_ID,
-                    f"⚠️ <b>Мут: ошибка удаления</b>\n"
-                    f"<code>{err}</code>\n\n"
-                    f"chat_id: <code>{chat_id}</code> | msg_id: <code>{message_id}</code>",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
+        logger.warning("Не удалось удалить сообщение %s: %s", message_id, e)
         return False
     except Exception as e:
         logger.error("Ошибка при удалении сообщения %s: %s", message_id, e)
@@ -90,6 +77,25 @@ async def delete_business_messages_bulk(
     return deleted
 
 
+async def _send_mute_autoreply(bot: Bot, business_connection_id: str, chat_id: int) -> bool:
+    """
+    Fallback для режима «Автоматизация чатов»: если удалить сообщение нельзя,
+    отправляем авто-ответ от имени бизнес-аккаунта.
+    Возвращает True если отправка прошла успешно.
+    """
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="🔇 Ваше сообщение не может быть обработано.",
+            business_connection_id=business_connection_id,
+        )
+        logger.info("Авто-ответ (мут) отправлен в чат %s", chat_id)
+        return True
+    except Exception as e:
+        logger.warning("Не удалось отправить авто-ответ мутированному пользователю в чате %s: %s", chat_id, e)
+        return False
+
+
 async def _handle_muted(message: Message):
     if not message.from_user:
         return
@@ -106,12 +112,25 @@ async def _handle_muted(message: Message):
     if len(message_store[chat_id]) > 500:
         message_store[chat_id] = message_store[chat_id][-500:]
 
-    if await is_muted(sender_id):
-        await delete_business_msg(
+    if not await is_muted(sender_id):
+        return
+
+    # Шаг 1: пробуем удалить сообщение
+    # Работает если бот подключён через «Подключённые боты» с разрешением «Удалять сообщения»
+    deleted = await delete_business_msg(
+        message.bot,
+        message.business_connection_id,
+        message.chat.id,
+        message.message_id,
+    )
+
+    # Шаг 2: если удаление не сработало (режим «Автоматизация чатов» или нет разрешения) —
+    # отправляем авто-ответ от имени бизнес-аккаунта
+    if not deleted and message.business_connection_id:
+        await _send_mute_autoreply(
             message.bot,
             message.business_connection_id,
             message.chat.id,
-            message.message_id,
         )
 
 
