@@ -40,6 +40,11 @@ COMMANDS_TEXT = """
 <b>.unmute</b>
 Снимает мут с собеседника в ЛС.
 
+<b>.del [секунды]</b>
+Удаляет сохранённые сообщения из бизнес-чата.
+<i>Пример:</i> <code>.del 30</code> — удалит через 30 сек.
+<code>.del</code> — удалит сразу.
+
 ⚠️ Команды работают только при активном ключе!
 """
 
@@ -56,7 +61,6 @@ SUPPORT_TEXT = (
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     admin = await is_admin(message.from_user.id)
-    # Только клавиатура — никаких лишних сообщений
     await message.answer(
         f"👋 Привет, <b>{message.from_user.first_name}</b>!\n"
         "Используй кнопки внизу для навигации.",
@@ -68,10 +72,6 @@ async def cmd_start(message: Message):
 # ─── Кнопка «⚙️ Настройка чатов» ─────────────────────────────────────────────
 
 async def show_chat_settings(user_id: int, first_name: str, send_fn, state: FSMContext):
-    """
-    Если не активирован — сразу запрашивает ключ (без промежуточного экрана).
-    Если активирован — показывает статус.
-    """
     from handlers.keys import KeyState
 
     is_creator = user_id == CREATOR_ID
@@ -93,7 +93,6 @@ async def show_chat_settings(user_id: int, first_name: str, send_fn, state: FSMC
             parse_mode="HTML"
         )
     else:
-        # Не активирован — сразу просим ключ
         await state.set_state(KeyState.waiting_for_key)
         await send_fn(
             "🔑 <b>Введи ключ активации</b>\n\n"
@@ -121,6 +120,51 @@ async def cb_chat_settings(callback: CallbackQuery, state: FSMContext):
         callback.from_user.first_name,
         callback.message.answer,
         state
+    )
+
+
+# ─── 👤 Профиль ───────────────────────────────────────────────────────────────
+
+@router.message(F.text == "👤 Профиль")
+async def reply_profile(message: Message):
+    user_id = message.from_user.id
+    is_creator = user_id == CREATOR_ID
+    activation = await get_activation(user_id)
+
+    if is_creator:
+        await message.answer(
+            f"👤 <b>Профиль</b>\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"👑 Статус: <b>Создатель бота</b>\n"
+            f"⭐️ Подписка: <b>Навсегда</b>",
+            parse_mode="HTML"
+        )
+        return
+
+    if not activation:
+        await message.answer(
+            f"👤 <b>Профиль</b>\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"📛 Статус: <b>Не активирован</b>\n\n"
+            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ.",
+            parse_mode="HTML"
+        )
+        return
+
+    activated_at = activation.get("activated_at", "—")
+    expires_at = activation.get("expires_at")
+
+    if expires_at:
+        sub_status = f"✅ Активна до: <code>{expires_at}</code>"
+    else:
+        sub_status = "✅ <b>Навсегда</b>"
+
+    await message.answer(
+        f"👤 <b>Профиль</b>\n\n"
+        f"🆔 ID: <code>{user_id}</code>\n"
+        f"📅 В боте с: <code>{activated_at}</code>\n"
+        f"🔑 Подписка: {sub_status}",
+        parse_mode="HTML"
     )
 
 
