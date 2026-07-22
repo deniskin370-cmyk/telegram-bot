@@ -1,10 +1,11 @@
 import logging
+import aiohttp
+
 from aiogram import Router, Bot
 from aiogram.types import BusinessConnection, BusinessMessagesDeleted, Message
-from aiogram.methods import DeleteMessage
 
 from database import is_muted
-from config import CREATOR_ID
+from config import CREATOR_ID, BOT_TOKEN
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -25,6 +26,7 @@ async def _delete_business_message(
     message_id: int,
     sender_id,
 ):
+    """Удаляет сообщение через прямой HTTP-запрос к Telegram API."""
     if not business_connection_id:
         logger.error("business_connection_id is None — удаление невозможно")
         if CREATOR_ID:
@@ -33,33 +35,42 @@ async def _delete_business_message(
                     CREATOR_ID,
                     "⚠️ <b>Мут не работает</b>: business_connection_id отсутствует.\n"
                     "Отключи и снова подключи бота в Telegram Business.",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
                 )
             except Exception:
                 pass
         return
 
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+    payload = {
+        "business_connection_id": business_connection_id,
+        "chat_id": chat_id,
+        "message_id": message_id,
+    }
+
     try:
-        # business_connection_id передаётся через extra_data (aiogram 3.13.1)
-        await bot(DeleteMessage(
-            chat_id=chat_id,
-            message_id=message_id,
-            extra_data={"business_connection_id": business_connection_id},
-        ))
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as resp:
+                result = await resp.json()
+
+        if result.get("ok"):
+            logger.info("Удалено сообщение %s от замученного %s", message_id, sender_id)
+        else:
+            err = result.get("description", "Unknown error")
+            logger.warning("Не удалось удалить: %s", err)
+            if CREATOR_ID:
+                try:
+                    await bot.send_message(
+                        CREATOR_ID,
+                        f"⚠️ <b>Мут: ошибка удаления</b>\n<code>{err}</code>\n\n"
+                        "Реши: Telegram → Настройки → Бизнес → Подключённые боты "
+                        "→ включи <b>«Удалять сообщения»</b>",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
     except Exception as e:
-        err = str(e)
-        logger.warning("Не удалось удалить сообщение замученного %s: %s", sender_id, err)
-        if CREATOR_ID:
-            try:
-                await bot.send_message(
-                    CREATOR_ID,
-                    f"⚠️ <b>Мут: ошибка удаления</b>\n<code>{err}</code>\n\n"
-                    "Проверь: Telegram → Бизнес → Подключённые боты → "
-                    "включи <b>«Удалять сообщения»</b>",
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
+        logger.error("HTTP ошибка при удалении: %s", e)
 
 
 async def _handle_muted(message: Message):
