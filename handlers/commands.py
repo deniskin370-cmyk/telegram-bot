@@ -3,8 +3,9 @@ from datetime import datetime, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, ChatPermissions
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-from database import is_user_activated, mute_user, unmute_user, is_muted
+from database import is_user_activated, mute_user, unmute_user, is_muted, is_admin
 from config import CREATOR_ID
 
 router = Router()
@@ -206,6 +207,90 @@ async def _do_unmute(message: Message):
     await _do_unmute_dm(message)
 
 
+# ─── .info ────────────────────────────────────────────────────────────────────
+
+async def _do_info(message: Message):
+    if not await is_user_activated(message.from_user.id):
+        await message.answer("❌ <b>Бот не активирован!</b>", parse_mode="HTML")
+        return
+
+    # Определяем цель: reply → тот пользователь, иначе собеседник (ЛС) или отправитель (группа)
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target = message.reply_to_message.from_user
+        target_id = target.id
+    elif message.chat.type == "private":
+        target = message.from_user
+        target_id = target.id
+    else:
+        # В группе без reply — показываем себя
+        target = message.from_user
+        target_id = target.id
+
+    # Удаляем команду из чата
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Telegram-профиль через get_chat (получаем bio, фото)
+    bio_text = "—"
+    photos_count = 0
+    try:
+        chat_info = await message.bot.get_chat(target_id)
+        if chat_info.bio:
+            bio_text = chat_info.bio
+        photos = await message.bot.get_user_profile_photos(target_id, limit=1)
+        photos_count = photos.total_count
+    except Exception:
+        pass
+
+    # База бота
+    muted = await is_muted(target_id)
+    activated = await is_user_activated(target_id)
+    admin = await is_admin(target_id)
+
+    # Собираем имя
+    full_name = target.full_name or "—"
+    username = f"@{target.username}" if target.username else "—"
+    premium = "✅ Да" if getattr(target, "is_premium", False) else "❌ Нет"
+    is_bot_flag = "🤖 Да" if target.is_bot else "👤 Нет"
+    lang = target.language_code or "—"
+
+    text = (
+        f"🔍 <b>Информация о пользователе</b>\n"
+        f"{'─' * 28}\n"
+        f"👤 <b>Имя:</b> {full_name}\n"
+        f"🔗 <b>Username:</b> {username}\n"
+        f"🆔 <b>ID:</b> <code>{target_id}</code>\n"
+        f"🤖 <b>Бот:</b> {is_bot_flag}\n"
+        f"⭐ <b>Premium:</b> {premium}\n"
+        f"🌐 <b>Язык:</b> {lang}\n"
+        f"📷 <b>Фото:</b> {photos_count} шт.\n"
+        f"📝 <b>Bio:</b> {bio_text}\n"
+        f"{'─' * 28}\n"
+        f"<b>Статус в боте:</b>\n"
+        f"🔇 <b>Мут:</b> {'да' if muted else 'нет'}\n"
+        f"🔑 <b>Активирован:</b> {'да' if activated else 'нет'}\n"
+        f"🛡 <b>Администратор:</b> {'да' if admin else 'нет'}\n"
+    )
+
+    # Отправляем результат в личку с ботом тому, кто вызвал команду
+    try:
+        await message.bot.send_message(
+            chat_id=message.from_user.id,
+            text=text,
+            parse_mode="HTML",
+        )
+    except (TelegramForbiddenError, TelegramBadRequest):
+        # Если бот заблокирован — отправляем прямо в чат (исчезнет через 10 сек)
+        try:
+            notice = await message.answer(text, parse_mode="HTML")
+            await asyncio.sleep(15)
+            await notice.delete()
+        except Exception:
+            pass
+
+
 # ─── Обычные сообщения (в группах и личке) ────────────────────────────────────
 
 @router.message(F.text.startswith(".spam"))
@@ -223,6 +308,11 @@ async def cmd_unmute(message: Message):
     await _do_unmute(message)
 
 
+@router.message(F.text.startswith(".info"))
+async def cmd_info(message: Message):
+    await _do_info(message)
+
+
 # ─── Business-сообщения ───────────────────────────────────────────────────────
 
 @router.business_message(F.text.startswith(".spam"))
@@ -238,5 +328,10 @@ async def cmd_unmute_business(message: Message):
 @router.business_message(F.text.startswith(".mute"))
 async def cmd_mute_business(message: Message):
     await _do_mute(message)
+
+
+@router.business_message(F.text.startswith(".info"))
+async def cmd_info_business(message: Message):
+    await _do_info(message)
 
 
