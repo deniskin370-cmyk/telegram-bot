@@ -11,14 +11,14 @@ def main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="⚙️ Настройка чатов"), KeyboardButton(text="🛒 Купить ключ")],
         [KeyboardButton(text="📋 Мои команды"), KeyboardButton(text="💬 Поддержка")],
-        [KeyboardButton(text="📖 Как подключить")],
+        [KeyboardButton(text="📖 Как подключить"), KeyboardButton(text="👤 Профиль")],
     ]
     if is_admin:
         buttons.append([KeyboardButton(text="🔑 Панель администратора")])
     return ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
-        persistent=True
+        persistent=True,
     )
 
 
@@ -51,20 +51,9 @@ def admin_panel_menu(is_creator: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🗑 Удалить администратора", callback_data="admin_remove_admin")],
     ]
     if is_creator:
-        buttons.append([InlineKeyboardButton(text="⭐️ Отправить подарок пользователю", callback_data="admin_send_gift")])
+        buttons.append([InlineKeyboardButton(text="💰 Выдать звёзды с баланса", callback_data="admin_send_stars")])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="start")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def gift_amount_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="15 ⭐️ ❤️",  callback_data="gift_amount_15"),
-            InlineKeyboardButton(text="25 ⭐️ 🎁",  callback_data="gift_amount_25"),
-            InlineKeyboardButton(text="50 ⭐️ 🎂",  callback_data="gift_amount_50"),
-        ],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")],
-    ])
 
 
 def key_unit_menu() -> InlineKeyboardMarkup:
