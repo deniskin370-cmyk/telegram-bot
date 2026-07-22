@@ -1,8 +1,9 @@
 import random
 import string
+import aiohttp
 from datetime import datetime, timedelta
 
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -12,8 +13,8 @@ from database import (
     is_admin, add_admin, remove_admin, get_all_admins,
     create_key, get_all_keys, get_stats, deactivate_key
 )
-from keyboards import admin_panel_menu, key_unit_menu, key_amount_menu, back_button
-from config import CREATOR_ID
+from keyboards import admin_panel_menu, key_unit_menu, key_amount_menu, back_button, gift_amount_menu
+from config import CREATOR_ID, BOT_TOKEN
 
 router = Router()
 
@@ -28,6 +29,7 @@ class AdminState(StatesGroup):
     waiting_for_admin_id = State()
     waiting_for_remove_admin_id = State()
     waiting_for_deactivate_key = State()
+    waiting_for_gift_user_id = State()
 
 
 def generate_key(length: int = 16) -> str:
@@ -43,7 +45,7 @@ async def cb_admin_panel(callback: CallbackQuery):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
     await callback.message.edit_text(
         "🔑 <b>Панель администратора</b>\n\nВыбери действие:",
-        reply_markup=admin_panel_menu(),
+        reply_markup=admin_panel_menu(is_creator=callback.from_user.id == CREATOR_ID),
         parse_mode="HTML"
     )
 
@@ -180,6 +182,134 @@ async def cb_key_amount(callback: CallbackQuery):
 
 
 # ─── Список ключей ────────────────────────────────────────────────────────────
+
+# ─── Отправить подарок пользователю (только CREATOR_ID) ──────────────────────
+
+async def _get_gift_id(star_count: int) -> str | None:
+    """Ищет gift_id по количеству звёзд через Telegram API."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/getAvailableGifts"
+            ) as resp:
+                data = await resp.json()
+        if not data.get("ok"):
+            return None
+        for gift in data["result"]["gifts"]:
+            if gift["star_count"] == star_count:
+                return gift["id"]
+    except Exception:
+        pass
+    return None
+
+
+async def _send_gift(user_id: int, gift_id: str) -> tuple[bool, str]:
+    """Отправляет подарок пользователю. Возвращает (ok, error_text)."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendGift",
+                json={"user_id": user_id, "gift_id": gift_id},
+            ) as resp:
+                data = await resp.json()
+        if data.get("ok"):
+            return True, ""
+        return False, data.get("description", "Unknown error")
+    except Exception as e:
+        return False, str(e)
+
+
+@router.callback_query(F.data == "admin_send_gift")
+async def cb_send_gift(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != CREATOR_ID:
+        return await callback.answer("⛔ Нет доступа.", show_alert=True)
+    await state.set_state(AdminState.waiting_for_gift_user_id)
+    await callback.message.edit_text(
+        "⭐️ <b>Отправить подарок пользователю</b>\n\n"
+        "Отправь <b>Telegram ID</b> пользователя, которому хочешь отправить подарок.\n"
+        "<i>ID можно узнать через @userinfobot</i>",
+        reply_markup=back_button("admin_panel"),
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.waiting_for_gift_user_id)
+async def process_gift_user_id(message: Message, state: FSMContext):
+    if message.from_user.id != CREATOR_ID:
+        await state.clear()
+        return
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer(
+            "❌ Неверный формат. Введи числовой Telegram ID.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML",
+        )
+        return
+
+    # Сохраняем ID получателя в данных стейта, меняем стейт на None
+    # но данные сохраняются — их прочитает callback gift_amount_
+    await state.update_data(gift_target_id=target_id)
+    await state.set_state(None)
+
+    await message.answer(
+        f"👤 Получатель: <code>{target_id}</code>\n\n"
+        "Выбери количество звёзд для подарка:",
+        reply_markup=gift_amount_menu(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("gift_amount_"))
+async def cb_gift_amount(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != CREATOR_ID:
+        return await callback.answer("⛔ Нет доступа.", show_alert=True)
+
+    try:
+        stars = int(callback.data.replace("gift_amount_", ""))
+    except ValueError:
+        return await callback.answer("❌ Ошибка формата.", show_alert=True)
+
+    data = await state.get_data()
+    target_id = data.get("gift_target_id")
+    if not target_id:
+        await callback.answer("❌ Получатель не указан. Начни заново.", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer("⏳ Отправляю подарок...")
+
+    gift_id = await _get_gift_id(stars)
+    if not gift_id:
+        await callback.message.edit_text(
+            f"❌ <b>Подарок на {stars} ⭐️ не найден в Telegram.</b>\n"
+            "Возможно, подарков с таким количеством звёзд нет в магазине.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML",
+        )
+        return
+
+    ok, err = await _send_gift(target_id, gift_id)
+    if ok:
+        emoji_map = {15: "❤️", 25: "🎁", 50: "🎂"}
+        emoji = emoji_map.get(stars, "⭐️")
+        await callback.message.edit_text(
+            f"✅ <b>Подарок отправлен!</b>\n\n"
+            f"👤 Получатель: <code>{target_id}</code>\n"
+            f"🎁 Подарок: {emoji} ({stars} ⭐️)",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML",
+        )
+    else:
+        await callback.message.edit_text(
+            f"❌ <b>Не удалось отправить подарок</b>\n\n"
+            f"Ошибка: <code>{err}</code>\n\n"
+            "Убедись, что на балансе бота достаточно звёзд.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML",
+        )
+
 
 @router.callback_query(F.data == "admin_list_keys")
 async def cb_list_keys(callback: CallbackQuery):

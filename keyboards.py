@@ -40,8 +40,8 @@ def chat_settings_menu(activated: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def admin_panel_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def admin_panel_menu(is_creator: bool = False) -> InlineKeyboardMarkup:
+    buttons = [
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="🔑 Создать ключ", callback_data="admin_create_key")],
         [InlineKeyboardButton(text="📋 Список ключей", callback_data="admin_list_keys")],
@@ -49,7 +49,21 @@ def admin_panel_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="👤 Добавить администратора", callback_data="admin_add_admin")],
         [InlineKeyboardButton(text="👥 Список администраторов", callback_data="admin_list_admins")],
         [InlineKeyboardButton(text="🗑 Удалить администратора", callback_data="admin_remove_admin")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="start")],
+    ]
+    if is_creator:
+        buttons.append([InlineKeyboardButton(text="⭐️ Отправить подарок пользователю", callback_data="admin_send_gift")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="start")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def gift_amount_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="15 ⭐️ ❤️",  callback_data="gift_amount_15"),
+            InlineKeyboardButton(text="25 ⭐️ 🎁",  callback_data="gift_amount_25"),
+            InlineKeyboardButton(text="50 ⭐️ 🎂",  callback_data="gift_amount_50"),
+        ],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")],
     ])
 
 

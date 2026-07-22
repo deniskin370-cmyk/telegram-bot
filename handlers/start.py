@@ -160,7 +160,7 @@ async def reply_admin_panel(message: Message):
         return
     await message.answer(
         "🔑 <b>Панель администратора</b>\n\nВыбери действие:",
-        reply_markup=admin_panel_menu(),
+        reply_markup=admin_panel_menu(is_creator=message.from_user.id == CREATOR_ID),
         parse_mode="HTML"
     )
 
