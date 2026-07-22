@@ -7,6 +7,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 from database import is_muted
 from config import CREATOR_ID
+from userbot import userbot_delete_messages
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -115,17 +116,20 @@ async def _handle_muted(message: Message):
     if not await is_muted(sender_id):
         return
 
-    # Шаг 1: пробуем удалить сообщение
-    # Работает если бот подключён через «Подключённые боты» с разрешением «Удалять сообщения»
-    deleted = await delete_business_msg(
-        message.bot,
-        message.business_connection_id,
-        message.chat.id,
-        message.message_id,
-    )
+    # Шаг 1: пробуем удалить через Pyrogram userbot (работает в ЛС без Business Premium)
+    deleted = await userbot_delete_messages(chat_id, [message.message_id])
 
-    # Шаг 2: если удаление не сработало (режим «Автоматизация чатов» или нет разрешения) —
-    # отправляем авто-ответ от имени бизнес-аккаунта
+    # Шаг 2: если userbot недоступен — пробуем через Bot API (deleteBusinessMessages)
+    # Работает если бот подключён через «Подключённые боты» с разрешением «Удалять сообщения»
+    if not deleted:
+        deleted = await delete_business_msg(
+            message.bot,
+            message.business_connection_id,
+            message.chat.id,
+            message.message_id,
+        )
+
+    # Шаг 3: оба метода не сработали — отправляем авто-ответ от имени бизнес-аккаунта
     if not deleted and message.business_connection_id:
         await _send_mute_autoreply(
             message.bot,

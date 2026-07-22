@@ -9,6 +9,7 @@ from aiogram.client.default import DefaultBotProperties
 from config import BOT_TOKEN
 from database import init_db
 from handlers import start, keys, admin, commands, business, buy
+from userbot import start_userbot, stop_userbot
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +35,13 @@ async def main():
     await init_db()
     logger.info("Database initialized")
 
+    # Запускаем Pyrogram userbot (для удаления сообщений в ЛС)
+    userbot_ok = await start_userbot()
+    if userbot_ok:
+        logger.info("Userbot активен — удаление в ЛС доступно")
+    else:
+        logger.warning("Userbot не запущен — удаление в ЛС недоступно")
+
     bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
@@ -49,7 +57,11 @@ async def main():
     dp.include_router(business.router)
 
     logger.info("Bot starting...")
-    await dp.start_polling(bot, allowed_updates=ALLOWED_UPDATES)
+    try:
+        await dp.start_polling(bot, allowed_updates=ALLOWED_UPDATES)
+    finally:
+        await stop_userbot()
+        await bot.session.close()
 
 
 if __name__ == "__main__":
