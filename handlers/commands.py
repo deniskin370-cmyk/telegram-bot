@@ -215,49 +215,71 @@ async def _do_info(message: Message):
         await message.answer("❌ <b>Бот не активирован!</b>", parse_mode="HTML")
         return
 
-    # Определяем цель: reply → тот пользователь, иначе собеседник (ЛС) или отправитель (группа)
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target = message.reply_to_message.from_user
-        target_id = target.id
-    elif message.chat.type == "private":
-        target = message.from_user
-        target_id = target.id
-    else:
-        # В группе без reply — показываем себя
-        target = message.from_user
-        target_id = target.id
+    # ── Определяем цель ──────────────────────────────────────────────────────
+    # В business-чате (ЛС через автоматизацию/бизнес):
+    #   message.from_user = владелец аккаунта (тот, кто набрал .info)
+    #   message.chat      = собеседник (тот, о ком нужна инфа)
+    # В группе с reply — reply-пользователь.
+    # В группе без reply или в обычном ЛС с ботом — сам отправитель.
 
-    # Удаляем команду из чата
+    if message.reply_to_message and message.reply_to_message.from_user:
+        # Группа: ответ на сообщение → берём того пользователя
+        target_id = message.reply_to_message.from_user.id
+    elif message.business_connection_id:
+        # Business / автоматизация в ЛС → цель = собеседник (не владелец)
+        target_id = message.chat.id
+    else:
+        # Обычное сообщение в ЛС с ботом или группа без reply → сам отправитель
+        target_id = message.from_user.id
+
+    # ── Удаляем команду из чата ───────────────────────────────────────────────
     try:
-        await message.delete()
+        if message.business_connection_id:
+            # В business-режиме нужен специальный метод удаления
+            await message.bot.delete_business_messages(
+                business_connection_id=message.business_connection_id,
+                chat_id=message.chat.id,
+                message_ids=[message.message_id],
+            )
+        else:
+            await message.delete()
     except Exception:
         pass
 
-    # Telegram-профиль через get_chat (получаем bio, фото)
+    # ── Telegram-профиль (bio, фото, username, premium и т.д.) ───────────────
     bio_text = "—"
     photos_count = 0
+    full_name = str(target_id)
+    username = "—"
+    premium = "❓"
+    is_bot_flag = "❓"
+    lang = "—"
+
     try:
         chat_info = await message.bot.get_chat(target_id)
-        if chat_info.bio:
-            bio_text = chat_info.bio
+        full_name = chat_info.full_name or str(target_id)
+        username = f"@{chat_info.username}" if chat_info.username else "—"
+        bio_text = chat_info.bio or "—"
+        is_bot_flag = "🤖 Да" if getattr(chat_info, "is_bot", False) else "👤 Нет"
+        premium = "✅ Да" if getattr(chat_info, "is_premium", False) else "❌ Нет"
+        lang = getattr(chat_info, "language_code", None) or "—"
+    except Exception:
+        pass
+
+    try:
         photos = await message.bot.get_user_profile_photos(target_id, limit=1)
         photos_count = photos.total_count
     except Exception:
         pass
 
-    # База бота
-    muted = await is_muted(target_id)
-    activated = await is_user_activated(target_id)
-    admin = await is_admin(target_id)
+    # ── База бота ─────────────────────────────────────────────────────────────
+    muted, activated, admin_flag = await asyncio.gather(
+        is_muted(target_id),
+        is_user_activated(target_id),
+        is_admin(target_id),
+    )
 
-    # Собираем имя
-    full_name = target.full_name or "—"
-    username = f"@{target.username}" if target.username else "—"
-    premium = "✅ Да" if getattr(target, "is_premium", False) else "❌ Нет"
-    is_bot_flag = "🤖 Да" if target.is_bot else "👤 Нет"
-    lang = target.language_code or "—"
-
-    # Внешние базы — запускаем параллельно пока формируем карточку
+    # ── Внешние базы (параллельно) ────────────────────────────────────────────
     ext_results = await lookup_all(full_name)
 
     text = (
@@ -272,10 +294,10 @@ async def _do_info(message: Message):
         f"📷 <b>Фото:</b> {photos_count} шт.\n"
         f"📝 <b>Bio:</b> {bio_text}\n"
         f"{'─' * 28}\n"
-        f"<b>Статус в боте:</b>\n"
-        f"🔇 <b>Мут:</b> {'да' if muted else 'нет'}\n"
-        f"🔑 <b>Активирован:</b> {'да' if activated else 'нет'}\n"
-        f"🛡 <b>Администратор:</b> {'да' if admin else 'нет'}\n"
+        f"<b>📊 Статус в боте:</b>\n"
+        f"🔇 Мут: {'да' if muted else 'нет'}\n"
+        f"🔑 Активирован: {'да' if activated else 'нет'}\n"
+        f"🛡 Администратор: {'да' if admin_flag else 'нет'}\n"
         f"{'─' * 28}\n"
         f"⚖️ <b>ФССП (долги / производства):</b>\n"
         f"{ext_results['fssp']}\n"
@@ -284,17 +306,21 @@ async def _do_info(message: Message):
         f"{ext_results['nalog']}\n"
     )
 
-    # Отправляем результат в личку с ботом тому, кто вызвал команду
+    # ── Отправляем в личку с ботом тому, кто запросил ─────────────────────────
+    sender_id = message.from_user.id
     try:
         await message.bot.send_message(
-            chat_id=message.from_user.id,
+            chat_id=sender_id,
             text=text,
             parse_mode="HTML",
+            disable_web_page_preview=True,
         )
     except (TelegramForbiddenError, TelegramBadRequest):
-        # Если бот заблокирован — отправляем прямо в чат (исчезнет через 10 сек)
+        # Бот заблокирован — шлём в чат на 15 сек
         try:
-            notice = await message.answer(text, parse_mode="HTML")
+            notice = await message.answer(
+                text, parse_mode="HTML", disable_web_page_preview=True
+            )
             await asyncio.sleep(15)
             await notice.delete()
         except Exception:
