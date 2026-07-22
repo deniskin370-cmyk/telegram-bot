@@ -7,6 +7,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from database import is_user_activated, mute_user, unmute_user, is_muted, is_admin
 from config import CREATOR_ID
+from handlers.info_lookup import lookup_all
 
 router = Router()
 
@@ -256,6 +257,9 @@ async def _do_info(message: Message):
     is_bot_flag = "🤖 Да" if target.is_bot else "👤 Нет"
     lang = target.language_code or "—"
 
+    # Внешние базы — запускаем параллельно пока формируем карточку
+    ext_results = await lookup_all(full_name)
+
     text = (
         f"🔍 <b>Информация о пользователе</b>\n"
         f"{'─' * 28}\n"
@@ -272,6 +276,12 @@ async def _do_info(message: Message):
         f"🔇 <b>Мут:</b> {'да' if muted else 'нет'}\n"
         f"🔑 <b>Активирован:</b> {'да' if activated else 'нет'}\n"
         f"🛡 <b>Администратор:</b> {'да' if admin else 'нет'}\n"
+        f"{'─' * 28}\n"
+        f"⚖️ <b>ФССП (долги / производства):</b>\n"
+        f"{ext_results['fssp']}\n"
+        f"{'─' * 28}\n"
+        f"🏢 <b>ФНС (ИП / организации):</b>\n"
+        f"{ext_results['nalog']}\n"
     )
 
     # Отправляем результат в личку с ботом тому, кто вызвал команду
