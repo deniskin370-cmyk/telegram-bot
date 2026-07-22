@@ -13,7 +13,7 @@ from database import (
     is_admin, add_admin, remove_admin, get_all_admins,
     create_key, get_all_keys, get_stats, deactivate_key
 )
-from keyboards import admin_panel_menu, key_unit_menu, key_amount_menu, back_button, gift_amount_menu
+from keyboards import admin_panel_menu, key_unit_menu, key_amount_menu, back_button
 from config import CREATOR_ID, BOT_TOKEN
 
 router = Router()
@@ -26,15 +26,35 @@ class AdminFilter(Filter):
 
 
 class AdminState(StatesGroup):
-    waiting_for_admin_id = State()
-    waiting_for_remove_admin_id = State()
+    waiting_for_admin_input = State()
+    waiting_for_remove_admin_input = State()
     waiting_for_deactivate_key = State()
-    waiting_for_gift_user_id = State()
+    waiting_for_gift_user = State()
+    waiting_for_gift_stars = State()
 
 
 def generate_key(length: int = 16) -> str:
     chars = string.ascii_letters + string.digits
     return ''.join(random.choices(chars, k=length))
+
+
+async def resolve_user(bot: Bot, text: str) -> tuple[int | None, str]:
+    """
+    Принимает @username или числовой ID.
+    Возвращает (user_id, подпись) или (None, текст_ошибки).
+    """
+    text = text.strip()
+    # Числовой ID
+    clean = text.lstrip('@')
+    if clean.lstrip('-').isdigit():
+        return int(clean), f"<code>{clean}</code>"
+    # Username
+    username = clean if text.startswith('@') else text
+    try:
+        chat = await bot.get_chat(f"@{username}")
+        return chat.id, f"@{username}"
+    except Exception as e:
+        return None, str(e)
 
 
 # ─── Панель администратора ────────────────────────────────────────────────────
@@ -181,9 +201,7 @@ async def cb_key_amount(callback: CallbackQuery):
         )
 
 
-# ─── Список ключей ────────────────────────────────────────────────────────────
-
-# ─── Отправить подарок пользователю (только CREATOR_ID) ──────────────────────
+# ─── Отправить подарок с баланса бота (только CREATOR_ID) ────────────────────
 
 async def _get_gift_id(star_count: int) -> str | None:
     """Ищет gift_id по количеству звёзд через Telegram API."""
@@ -223,68 +241,71 @@ async def _send_gift(user_id: int, gift_id: str) -> tuple[bool, str]:
 async def cb_send_gift(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != CREATOR_ID:
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
-    await state.set_state(AdminState.waiting_for_gift_user_id)
+    await state.set_state(AdminState.waiting_for_gift_user)
     await callback.message.edit_text(
         "⭐️ <b>Отправить подарок пользователю</b>\n\n"
-        "Отправь <b>Telegram ID</b> пользователя, которому хочешь отправить подарок.\n"
-        "<i>ID можно узнать через @userinfobot</i>",
+        "Отправь <b>@username</b> или <b>Telegram ID</b> получателя:",
         reply_markup=back_button("admin_panel"),
         parse_mode="HTML",
     )
 
 
-@router.message(AdminState.waiting_for_gift_user_id)
-async def process_gift_user_id(message: Message, state: FSMContext):
+@router.message(AdminState.waiting_for_gift_user)
+async def process_gift_user(message: Message, state: FSMContext, bot: Bot):
     if message.from_user.id != CREATOR_ID:
         await state.clear()
         return
-    try:
-        target_id = int(message.text.strip())
-    except ValueError:
+
+    user_id, label = await resolve_user(bot, message.text.strip())
+    if user_id is None:
         await message.answer(
-            "❌ Неверный формат. Введи числовой Telegram ID.",
+            f"❌ Не удалось найти пользователя: <code>{label}</code>\n\n"
+            "Введи корректный @username или числовой ID.",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML",
         )
         return
 
-    # Сохраняем ID получателя в данных стейта, меняем стейт на None
-    # но данные сохраняются — их прочитает callback gift_amount_
-    await state.update_data(gift_target_id=target_id)
-    await state.set_state(None)
-
+    await state.update_data(gift_target_id=user_id, gift_target_label=label)
+    await state.set_state(AdminState.waiting_for_gift_stars)
     await message.answer(
-        f"👤 Получатель: <code>{target_id}</code>\n\n"
-        "Выбери количество звёзд для подарка:",
-        reply_markup=gift_amount_menu(),
+        f"👤 Получатель: {label}\n\n"
+        "Введи количество ⭐️ звёзд для подарка <b>(от 1 до 100000)</b>:",
+        reply_markup=back_button("admin_panel"),
         parse_mode="HTML",
     )
 
 
-@router.callback_query(F.data.startswith("gift_amount_"))
-async def cb_gift_amount(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != CREATOR_ID:
-        return await callback.answer("⛔ Нет доступа.", show_alert=True)
+@router.message(AdminState.waiting_for_gift_stars)
+async def process_gift_stars(message: Message, state: FSMContext, bot: Bot):
+    if message.from_user.id != CREATOR_ID:
+        await state.clear()
+        return
 
     try:
-        stars = int(callback.data.replace("gift_amount_", ""))
+        stars = int(message.text.strip())
+        if not (1 <= stars <= 100000):
+            raise ValueError
     except ValueError:
-        return await callback.answer("❌ Ошибка формата.", show_alert=True)
+        await message.answer(
+            "❌ Введи целое число от 1 до 100000.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML",
+        )
+        return
 
     data = await state.get_data()
     target_id = data.get("gift_target_id")
-    if not target_id:
-        await callback.answer("❌ Получатель не указан. Начни заново.", show_alert=True)
-        return
-
+    label = data.get("gift_target_label", str(target_id))
     await state.clear()
-    await callback.answer("⏳ Отправляю подарок...")
+
+    await message.answer(f"⏳ Ищу подарок на {stars} ⭐️ и отправляю...")
 
     gift_id = await _get_gift_id(stars)
     if not gift_id:
-        await callback.message.edit_text(
+        await message.answer(
             f"❌ <b>Подарок на {stars} ⭐️ не найден в Telegram.</b>\n"
-            "Возможно, подарков с таким количеством звёзд нет в магазине.",
+            "Такого подарка нет в магазине. Попробуй другое количество.",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML",
         )
@@ -292,17 +313,15 @@ async def cb_gift_amount(callback: CallbackQuery, state: FSMContext):
 
     ok, err = await _send_gift(target_id, gift_id)
     if ok:
-        emoji_map = {15: "❤️", 25: "🎁", 50: "🎂"}
-        emoji = emoji_map.get(stars, "⭐️")
-        await callback.message.edit_text(
+        await message.answer(
             f"✅ <b>Подарок отправлен!</b>\n\n"
-            f"👤 Получатель: <code>{target_id}</code>\n"
-            f"🎁 Подарок: {emoji} ({stars} ⭐️)",
+            f"👤 Получатель: {label}\n"
+            f"🎁 Подарок: {stars} ⭐️",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML",
         )
     else:
-        await callback.message.edit_text(
+        await message.answer(
             f"❌ <b>Не удалось отправить подарок</b>\n\n"
             f"Ошибка: <code>{err}</code>\n\n"
             "Убедись, что на балансе бота достаточно звёзд.",
@@ -310,6 +329,8 @@ async def cb_gift_amount(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
         )
 
+
+# ─── Список ключей ────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin_list_keys")
 async def cb_list_keys(callback: CallbackQuery):
@@ -375,46 +396,48 @@ async def process_deactivate_key(message: Message, state: FSMContext):
         )
 
 
-# ─── Добавить администратора ──────────────────────────────────────────────────
+# ─── Добавить администратора (по @username или ID) ────────────────────────────
 
 @router.callback_query(F.data == "admin_add_admin")
 async def cb_add_admin(callback: CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
-    await state.set_state(AdminState.waiting_for_admin_id)
+    await state.set_state(AdminState.waiting_for_admin_input)
     await callback.message.edit_text(
         "👤 <b>Добавить администратора</b>\n\n"
-        "Отправь <b>Telegram ID</b> пользователя.\n"
-        "<i>ID можно узнать через @userinfobot</i>",
+        "Отправь <b>@username</b> или <b>Telegram ID</b> пользователя:",
         reply_markup=back_button("admin_panel"),
         parse_mode="HTML"
     )
 
 
-@router.message(AdminState.waiting_for_admin_id)
-async def process_add_admin(message: Message, state: FSMContext):
+@router.message(AdminState.waiting_for_admin_input)
+async def process_add_admin(message: Message, state: FSMContext, bot: Bot):
     if not await is_admin(message.from_user.id):
         await state.clear()
         return
     await state.clear()
-    try:
-        target_id = int(message.text.strip())
-        success = await add_admin(target_id)
-        if success:
-            await message.answer(
-                f"✅ Пользователь <code>{target_id}</code> назначен администратором.",
-                reply_markup=back_button("admin_panel"),
-                parse_mode="HTML"
-            )
-        else:
-            await message.answer(
-                "❌ Не удалось добавить администратора.",
-                reply_markup=back_button("admin_panel"),
-                parse_mode="HTML"
-            )
-    except ValueError:
+
+    user_id, label = await resolve_user(bot, message.text.strip())
+    if user_id is None:
         await message.answer(
-            "❌ Неверный формат. Введи числовой Telegram ID.",
+            f"❌ Не удалось найти пользователя: <code>{label}</code>\n"
+            "Введи корректный @username или числовой ID.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML"
+        )
+        return
+
+    success = await add_admin(user_id)
+    if success:
+        await message.answer(
+            f"✅ Пользователь {label} назначен администратором.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            "❌ Не удалось добавить администратора.",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML"
         )
@@ -444,52 +467,56 @@ async def cb_list_admins(callback: CallbackQuery):
     )
 
 
-# ─── Удалить администратора ───────────────────────────────────────────────────
+# ─── Удалить администратора (по @username или ID) ─────────────────────────────
 
 @router.callback_query(F.data == "admin_remove_admin")
 async def cb_remove_admin(callback: CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
-    await state.set_state(AdminState.waiting_for_remove_admin_id)
+    await state.set_state(AdminState.waiting_for_remove_admin_input)
     await callback.message.edit_text(
         "🗑 <b>Удалить администратора</b>\n\n"
-        "Отправь <b>Telegram ID</b> администратора.",
+        "Отправь <b>@username</b> или <b>Telegram ID</b> администратора:",
         reply_markup=back_button("admin_panel"),
         parse_mode="HTML"
     )
 
 
-@router.message(AdminState.waiting_for_remove_admin_id)
-async def process_remove_admin(message: Message, state: FSMContext):
+@router.message(AdminState.waiting_for_remove_admin_input)
+async def process_remove_admin(message: Message, state: FSMContext, bot: Bot):
     if not await is_admin(message.from_user.id):
         await state.clear()
         return
     await state.clear()
-    try:
-        target_id = int(message.text.strip())
-        if target_id == CREATOR_ID:
-            await message.answer(
-                "⛔ Нельзя снять создателя бота.",
-                reply_markup=back_button("admin_panel"),
-                parse_mode="HTML"
-            )
-            return
-        success = await remove_admin(target_id)
-        if success:
-            await message.answer(
-                f"✅ Пользователь <code>{target_id}</code> снят с прав администратора.",
-                reply_markup=back_button("admin_panel"),
-                parse_mode="HTML"
-            )
-        else:
-            await message.answer(
-                "❌ Не удалось снять администратора. Проверь ID.",
-                reply_markup=back_button("admin_panel"),
-                parse_mode="HTML"
-            )
-    except ValueError:
+
+    user_id, label = await resolve_user(bot, message.text.strip())
+    if user_id is None:
         await message.answer(
-            "❌ Неверный формат. Введи числовой Telegram ID.",
+            f"❌ Не удалось найти пользователя: <code>{label}</code>\n"
+            "Введи корректный @username или числовой ID.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML"
+        )
+        return
+
+    if user_id == CREATOR_ID:
+        await message.answer(
+            "⛔ Нельзя снять создателя бота.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML"
+        )
+        return
+
+    success = await remove_admin(user_id)
+    if success:
+        await message.answer(
+            f"✅ Пользователь {label} снят с прав администратора.",
+            reply_markup=back_button("admin_panel"),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            f"❌ Не удалось снять администратора {label}. Проверь корректность.",
             reply_markup=back_button("admin_panel"),
             parse_mode="HTML"
         )
