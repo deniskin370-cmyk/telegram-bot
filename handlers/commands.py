@@ -153,80 +153,6 @@ async def _do_unmute_dm(message: Message):
         await message.answer("❌ Не удалось снять мут.")
 
 
-# ─── .del [секунды] ───────────────────────────────────────────────────────────
-
-async def _do_del(message: Message, bot: Bot):
-    """
-    .del [N] — удаляет все сохранённые входящие сообщения из этого чата
-    через N секунд. Если N не указан — удаляет сразу.
-    """
-    if not await is_user_activated(message.from_user.id):
-        await message.answer(
-            "❌ <b>Бот не активирован!</b>\n\n"
-            "Нажми <b>⚙️ Настройка чатов</b> и введи ключ.",
-            parse_mode="HTML",
-        )
-        return
-
-    if not message.business_connection_id:
-        await message.reply(
-            "❌ Команда <code>.del</code> работает только в бизнес-чатах.",
-            parse_mode="HTML",
-        )
-        return
-
-    parts = message.text.split()
-    seconds = 0
-    if len(parts) >= 2:
-        try:
-            seconds = int(parts[1])
-            if seconds < 0:
-                raise ValueError
-        except ValueError:
-            await message.reply(
-                "❌ Укажи целое число секунд.\nПример: <code>.del 30</code>",
-                parse_mode="HTML",
-            )
-            return
-
-    chat_id = message.chat.id
-    bc_id = message.business_connection_id
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    if seconds > 0:
-        notice = await message.answer(
-            f"🗑 <b>Чат будет очищен через {seconds} сек.</b>",
-            parse_mode="HTML",
-        )
-        await asyncio.sleep(seconds)
-        try:
-            await notice.delete()
-        except Exception:
-            pass
-
-    # Импортируем message_store из business.py
-    from handlers.business import message_store, delete_business_messages_bulk
-
-    ids = message_store.get(chat_id, [])
-    if not ids:
-        await message.answer("ℹ️ Нет сохранённых сообщений для удаления.")
-        return
-
-    # Копируем и очищаем хранилище
-    to_delete = list(ids)
-    message_store[chat_id] = []
-
-    deleted = await delete_business_messages_bulk(bot, bc_id, chat_id, to_delete)
-    await message.answer(
-        f"🗑 <b>Удалено {deleted} из {len(to_delete)} сообщений.</b>",
-        parse_mode="HTML",
-    )
-
-
 # ─── Общий разбор .mute [число] ───────────────────────────────────────────────
 
 async def _do_mute(message: Message):
@@ -311,11 +237,3 @@ async def cmd_mute_business(message: Message):
     await _do_mute(message)
 
 
-@router.business_message(F.text.startswith(".del"))
-async def cmd_del_business(message: Message, bot: Bot):
-    await _do_del(message, bot)
-
-
-@router.message(F.text.startswith(".del"))
-async def cmd_del(message: Message, bot: Bot):
-    await _do_del(message, bot)
