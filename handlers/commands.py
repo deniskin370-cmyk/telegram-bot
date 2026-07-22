@@ -94,10 +94,12 @@ async def _do_mute_group(message: Message, minutes: int):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=until_date,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        # Удаляем сообщение на которое ответили + команду .mute
+        for msg in (message.reply_to_message, message):
+            try:
+                await msg.delete()
+            except Exception:
+                pass
         await message.answer(
             f"🔇 <b>{target_user.mention_html()} замучен на {time_text}</b>\n"
             f"🕐 До: {until_date.strftime('%d.%m.%Y %H:%M')}",
