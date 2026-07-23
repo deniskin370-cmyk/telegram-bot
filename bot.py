@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from config import BOT_TOKEN
 from database import init_db
-from handlers import start, keys, admin, commands, business, buy
+from handlers import start, keys, admin, commands, business, buy, session_gen
 from userbot import start_userbot, stop_userbot
 
 logging.basicConfig(
@@ -55,6 +55,7 @@ async def main():
     dp.include_router(commands.router)
     dp.include_router(buy.router)
     dp.include_router(business.router)
+    dp.include_router(session_gen.router)
 
     logger.info("Bot starting...")
     try:
